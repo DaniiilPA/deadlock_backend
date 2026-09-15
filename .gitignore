@@ -1,9 +1,47 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments & Virtual Envs
 venv/
 .venv/
-__pycache__/
-*.pyc
-.vscode/
+env/
 .env/
+ENV/
+
+# Environment Variables (Секреты, ключи, пароли БД)
 .env
+.env.*
+!.env.example
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database & Storage
 *.db
+*.sqlite3
 data/
+storage/uploads/*
+!storage/uploads/.gitkeep
+
+# ML Model Weights (Файлы весов больше 100MB GitHub не пропустит)
+app/ml/weights/*
+!app/ml/weights/.gitkeep
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+
+# Logs & Celery state
+*.log
+celerybeat-schedule
+celerybeat.pid
+
+# OS generated files
+.DS_Store
+Thumbs.db
