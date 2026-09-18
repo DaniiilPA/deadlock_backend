@@ -6,7 +6,6 @@ api_router = APIRouter(prefix="/api")
 # Подключаем auth эндпоинты -> сформируется /api/auth/...
 api_router.include_router(auth_router)
 
-# Сюда же позже подключишь остальные свои роутеры:
 # from app.api.polling import router as polling_router
 # from app.api.projects import router as projects_router
 # api_router.include_router(polling_router)

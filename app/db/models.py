@@ -1,9 +1,8 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import ForeignKey, String, text
-from sqlalchemy.dialects.postgresql import ARRAY, TIMESTAMPTZ, UUID
+from sqlalchemy import DateTime, ForeignKey, String, func, text
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
 
 
 class Base(DeclarativeBase):
@@ -38,23 +37,22 @@ class User(Base):
         default=lambda: ["user"],
     )
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMPTZ,
+        DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMPTZ,
+        DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMPTZ,
+        DateTime(timezone=True),
         nullable=True,
         default=None,
     )
 
-    # Связь 1-ко-многим с refresh_tokens (при удалении юзера токены удалятся каскадно)
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -86,10 +84,10 @@ class RefreshToken(Base):
         String(45), nullable=True
     )
     expires_at: Mapped[datetime] = mapped_column(
-        TIMESTAMPTZ, nullable=False
+        DateTime(timezone=True), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMPTZ,
+        DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
     )

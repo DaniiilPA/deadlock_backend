@@ -9,7 +9,7 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.security import AppException
 from app.db.session import engine
-
+from app.db.models import Base
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
+            await conn.run_sync(Base.metadata.create_all)
         logger.info("Успешное подключение к бд")
     except Exception as e:
         logger.critical(f"Не удалось подключиться к бд: {e}")
