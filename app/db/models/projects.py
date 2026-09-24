@@ -209,7 +209,10 @@ class StageEquipmentRequirement(Base):
         index=True,
     )
     equipment_type: Mapped[str] = mapped_column(
-        String(127), nullable=False, index=True
+        String(64),
+        ForeignKey("equipment_types.code", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
     required_count: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("1"), default=1

@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func, text
+from sqlalchemy import Boolean, DateTime, Index, ForeignKey, Numeric, String, Text, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -66,6 +66,16 @@ class Alert(Base):
         back_populates="alert"
     )
 
+    __table_args__ = (
+        Index(
+            "uq_open_alert_per_stage_trigger",
+            "project_id",
+            "schedule_id",
+            "trigger_type",
+            unique=True,
+            postgresql_where=(text("status = 'OPEN'")),
+        ),
+    )
 
 class AlertResolution(Base):
     __tablename__ = "alert_resolutions"
@@ -149,6 +159,9 @@ class SpecialStatusWindow(Base):
     )
     reason_comment: Mapped[str] = mapped_column(
         Text, nullable=False
+    )
+    close_comment: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default=None
     )
 
     project: Mapped["Project"] = relationship(back_populates="special_status_windows")
