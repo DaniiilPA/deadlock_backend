@@ -80,7 +80,7 @@ __all__ = [
     "ErrorBody",
     "ErrorResponse",
     "MessageResponse",
-    # auth
+    # users
     "UserRegisterRequest",
     "UserLoginRequest",
     "UserRolesUpdateByEmailRequest",
