@@ -1,24 +1,23 @@
-# app/services/schedule_service.py
 import uuid
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    InvalidProjectStatusException,
     ProjectNotFoundException,
     ScheduleNotFoundException,
-    InvalidProjectStatusException,
     TemplatesNotFoundException,
 )
 from app.db.models import (
+    AuditTrail,
     ProjectSchedule,
     StageEquipmentRequirement,
-    AuditTrail,
 )
 from app.repositories.schedule_repo import ScheduleRepository
-from app.schemas.schedules import (
+from app.schemas import (
     CascadeShiftResponse,
-    ScheduleSyncItem,
     ScheduleStatusEnum,
+    StageSyncItem,
 )
 
 
@@ -43,7 +42,7 @@ class ScheduleService:
         if not templates:
             raise TemplatesNotFoundException("В справочнике нет этапов для данного типа стройки")
 
-        # Удаляем старый черновик
+        # Очищаем старые этапы черновика, если они были
         await self._repo.delete_schedules_by_project_id(project_id)
 
         current_start = start_date
@@ -88,7 +87,7 @@ class ScheduleService:
             raise ProjectNotFoundException(project_id)
         return await self._repo.get_schedules_by_project_id(project_id)
 
-    async def bulk_sync(self, project_id: uuid.UUID, stages_data: list[ScheduleSyncItem]) -> None:
+    async def bulk_sync(self, project_id: uuid.UUID, stages_data: list[StageSyncItem]) -> None:
         project = await self._repo.get_project_by_id(project_id)
         if not project:
             raise ProjectNotFoundException(project_id)
@@ -122,7 +121,7 @@ class ScheduleService:
                 self._repo.add(schedule)
                 await self._session.flush()
 
-            # Обновление техники
+            # Обновление техники под этап
             await self._repo.delete_equipment_by_schedule_id(schedule.id)
             for eq in item.equipment_requirements:
                 self._repo.add(
