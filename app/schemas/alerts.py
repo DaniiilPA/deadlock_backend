@@ -1,0 +1,36 @@
+import uuid
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict
+
+
+class AlertTriggerRequest(BaseModel):
+    project_id: uuid.UUID
+    schedule_id: uuid.UUID | None = None
+    severity: str = "YELLOW"  # "YELLOW" или "RED"
+    trigger_type: str  # "EQUIPMENT_DEFICIT", "EQUIPMENT_IDLE", "UNMONITORED_ZONE", etc.
+
+
+class AlertResolveRequest(BaseModel):
+    action_taken: str  # "FALSE_ALARM", "PURPLE_STATUS", "ORANGE_STATUS"
+    engineer_comment: str
+    evidence_frame_ids: list[uuid.UUID] | None = None
+    target_deadline: datetime | None = None  # Для PURPLE и ORANGE
+
+
+class AlertResponse(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    schedule_id: uuid.UUID | None
+    severity: str
+    trigger_type: str
+    status: str
+    triggered_at: datetime
+    yellow_escalated_to_red_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AlertEscalationResponse(BaseModel):
+    escalated_count: int
+    escalated_alert_ids: list[uuid.UUID]
