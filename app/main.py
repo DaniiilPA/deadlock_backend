@@ -1,8 +1,11 @@
 from contextlib import asynccontextmanager
 import logging
-from fastapi import FastAPI, Request, status
+import os
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.api.router import api_router
@@ -10,6 +13,7 @@ from app.core.config import settings
 from app.core.security import AppException
 from app.db.session import engine
 from app.db.models import Base
+
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
@@ -17,7 +21,8 @@ logger = logging.getLogger("app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    #старт
+    # Старт: создаем папку под статику и проверяем БД
+    os.makedirs("storage", exist_ok=True)
     logger.info("Проверка подключения к бд")
     try:
         async with engine.begin() as conn:
@@ -44,9 +49,30 @@ app = FastAPI(
 )
 
 
-# Единый формат ошибок
+# CORS
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
 
-# Перехват наших бизнес-ошибок (409 EmailAlreadyExists, 401 Unauthorized и т.д.)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,  # разрешает отправку кук и Bearer-токена
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Статика
+
+app.mount("/static", StaticFiles(directory="storage"), name="static")
+
+# Ошибки
+
+# Перехватбизнес-ошибок (409, 401 и т.д.)
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
     return JSONResponse(
@@ -61,7 +87,23 @@ async def app_exception_handler(request: Request, exc: AppException):
     )
 
 
-# Перехват ошибок валидации FastAPI/Pydantic (приводим к стандарту 400 Bad Request)
+# Перехват стандартных HTTPException (например, 403 из проверки прав или 404)
+# Приводим к формату {"error": {...}}
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": f"HTTP_{exc.status_code}",
+                "message": str(exc.detail),
+                "details": None,
+            }
+        },
+    )
+
+
+# Перехват ошибок валидации FastAPI/Pydantic
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     details = []
@@ -87,7 +129,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Подключаем роутер с префиксом /api
+# Подключаем роутер
 app.include_router(api_router)
 
 
