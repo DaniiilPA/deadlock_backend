@@ -23,7 +23,7 @@ ACCESS_TOKEN_EXPIRE_SECONDS=900               # 15 минут
 
 REFRESH_TOKEN_EXPIRE_SECONDS=2592000          # 30 дней (Max-Age)
 COOKIE_NAME=refresh_token
-COOKIE_PATH=/api/auth
+COOKIE_PATH=/api/v1/auth
 COOKIE_SAMESITE=strict
 
 # ВАЖНО ДЛЯ РАЗРАБОТКИ:
