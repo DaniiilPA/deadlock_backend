@@ -290,7 +290,10 @@ class ScheduleService:
         self._repo.add(audit)
         await self._session.commit()
 
-        new_end = last_stage.phantom_end_date or last_stage.base_end_date
+        if target_timeline == "BASE":
+            new_end = last_stage.base_end_date
+        else:
+            new_end = last_stage.phantom_end_date or last_stage.base_end_date
         old_end = new_end - shift_delta
 
         return CascadeShiftResponse(

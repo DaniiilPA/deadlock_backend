@@ -1,9 +1,9 @@
+import os
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import os 
 from app.api.dependencies import (
     get_current_user,
     get_db,
@@ -17,11 +17,12 @@ from app.schemas import (
     CameraUpdate,
     FrameAnalysisCreate,
     FrameAnalysisResponse,
+    FrameDetectionUpdate,
     FrameEvidenceUpdate,
+    FrameUploadResponse,
     IntervalAnalyticsCreate,
     IntervalAnalyticsResponse,
     MessageResponse,
-    FrameDetectionUpdate,
 )
 from app.services.monitoring_service import MonitoringService
 
@@ -31,8 +32,6 @@ router = APIRouter(tags=["Monitoring"])
 def get_monitoring_service(session: AsyncSession = Depends(get_db)) -> MonitoringService:
     return MonitoringService(session)
 
-
-# Камеры
 
 @router.get(
     "/projects/{project_id}/cameras",
@@ -57,7 +56,7 @@ async def create_camera(
     project_id: uuid.UUID,
     payload: CameraCreate,
     service: MonitoringService = Depends(get_monitoring_service),
-    current_user: User = Depends(require_project_access("foreman")),
+    current_user: User = Depends(require_project_access("foreman", "engineer")),
 ):
     return await service.create_camera(project_id, payload)
 
@@ -71,9 +70,9 @@ async def update_camera(
     camera_id: uuid.UUID,
     payload: CameraUpdate,
     service: MonitoringService = Depends(get_monitoring_service),
-    current_user: User = Depends(require_roles("admin", "foreman")),
+    current_user: User = Depends(require_roles("admin", "foreman", "engineer")),
 ):
-    return await service.update_camera(camera_id, payload)
+    return await service.update_camera(camera_id, payload, current_user)
 
 
 @router.delete(
@@ -86,11 +85,29 @@ async def delete_camera(
     service: MonitoringService = Depends(get_monitoring_service),
     current_user: User = Depends(require_roles("admin", "foreman")),
 ):
-    await service.delete_camera(camera_id)
+    await service.delete_camera(camera_id, current_user)
     return MessageResponse(message="Камера успешно удалена")
 
 
-# Кадры (Интерфейс для воркера и фронтенда)
+@router.post(
+    "/cameras/{camera_id}/frames/upload",
+    response_model=FrameUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Физическая загрузка файла снимка с камеры",
+)
+async def upload_frame(
+    camera_id: uuid.UUID,
+    file: UploadFile = File(...),
+    service: MonitoringService = Depends(get_monitoring_service),
+    current_user: User = Depends(get_current_user),
+):
+    file_path, image_url, filename = await service.save_uploaded_frame(camera_id, file)
+    return FrameUploadResponse(
+        image_path=file_path,
+        image_url=image_url,
+        filename=filename,
+    )
+
 
 @router.post(
     "/cameras/{camera_id}/frames",
@@ -105,6 +122,31 @@ async def record_frame(
     current_user: User = Depends(get_current_user),
 ):
     return await service.record_frame(camera_id, payload)
+
+
+@router.patch(
+    "/frames/{frame_id}/detection",
+    response_model=FrameAnalysisResponse,
+    summary="Сохранение детекции нейросети для ранее загруженного кадра",
+)
+async def update_frame_detection(
+    frame_id: uuid.UUID,
+    payload: FrameDetectionUpdate,
+    service: MonitoringService = Depends(get_monitoring_service),
+    current_user: User = Depends(get_current_user),
+):
+    frame = await service.update_frame_detection(frame_id, payload)
+    return FrameAnalysisResponse(
+        id=frame.id,
+        camera_id=frame.camera_id,
+        project_id=frame.project_id,
+        captured_at=frame.captured_at,
+        image_path=frame.image_path,
+        image_url=f"/static/{os.path.basename(frame.image_path)}" if frame.image_path else None,
+        is_saved_for_report=frame.is_saved_for_report,
+        detection_result=frame.detection_result,
+        processed_at=frame.processed_at,
+    )
 
 
 @router.get(
@@ -149,8 +191,6 @@ async def set_frame_evidence(
     return MessageResponse(message="Статус улики успешно обновлен")
 
 
-# Интервалы (Прием от воркера и выдача фронтенду)
-
 @router.post(
     "/monitoring/interval-analytics",
     response_model=IntervalAnalyticsResponse,
@@ -178,27 +218,3 @@ async def list_interval_analytics(
     current_user: User = Depends(require_project_access()),
 ):
     return await service.list_interval_analytics(project_id, limit, offset)
-
-@router.patch(
-    "/frames/{frame_id}/detection",
-    response_model=FrameAnalysisResponse,
-    summary="Сохранение детекции нейросети для ранее загруженного кадра",
-)
-async def update_frame_detection(
-    frame_id: uuid.UUID,
-    payload: FrameDetectionUpdate,
-    service: MonitoringService = Depends(get_monitoring_service),
-    current_user: User = Depends(get_current_user),
-):
-    frame = await service.update_frame_detection(frame_id, payload)
-    return FrameAnalysisResponse(
-        id=frame.id,
-        camera_id=frame.camera_id,
-        project_id=frame.project_id,
-        captured_at=frame.captured_at,
-        image_path=frame.image_path,
-        image_url=f"/static/{os.path.basename(frame.image_path)}" if frame.image_path else None,
-        is_saved_for_report=frame.is_saved_for_report,
-        detection_result=frame.detection_result,
-        processed_at=frame.processed_at,
-    )

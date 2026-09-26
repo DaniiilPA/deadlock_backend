@@ -97,3 +97,8 @@ class TriggerScenarioRequest(BaseModel):
         ...,
         description="SCENARIO_NORMAL, SCENARIO_DEFICIT, SCENARIO_BLIND_SPOT, SCENARIO_AHEAD"
     )
+    
+class FrameUploadResponse(BaseModel):
+    image_path: str
+    image_url: str
+    filename: str

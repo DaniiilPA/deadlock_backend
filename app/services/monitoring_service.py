@@ -1,18 +1,21 @@
 import os
+import shutil
 import uuid
 from datetime import datetime, timezone
+from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import EntityNotFoundException, ProjectNotFoundException
-from app.db.models import Camera, CameraFrameAnalysis, CameraIntervalAnalytics
+from app.core.exceptions import DomainException, EntityNotFoundException, ProjectNotFoundException
+from app.db.models import Camera, CameraFrameAnalysis, CameraIntervalAnalytics, User
 from app.repositories.monitoring_repo import MonitoringRepository
+from app.repositories.project_repo import ProjectRepository
 from app.schemas.monitoring import (
     CameraCreate,
     CameraUpdate,
     FrameAnalysisCreate,
     FrameAnalysisResponse,
-    IntervalAnalyticsCreate,
     FrameDetectionUpdate,
+    IntervalAnalyticsCreate,
 )
 
 
@@ -21,11 +24,21 @@ class MonitoringService:
         self,
         session: AsyncSession,
         monitoring_repo: MonitoringRepository | None = None,
+        project_repo: ProjectRepository | None = None,
     ) -> None:
         self._session = session
         self._repo = monitoring_repo or MonitoringRepository(session)
+        self._project_repo = project_repo or ProjectRepository(session)
 
-    # Управление точками обзора (Камерами)
+    async def _check_camera_permission(self, camera: Camera, user: User) -> None:
+        if "admin" in user.roles:
+            return
+        assignment = await self._project_repo.get_assignment(camera.project_id, user.id)
+        if not assignment or assignment.role_in_project not in ("foreman", "engineer"):
+            raise DomainException(
+                message="Недостаточно прав. Вы должны быть назначены прорабом или инженером на данный объект строительства",
+                status_code=403,
+            )
 
     async def create_camera(self, project_id: uuid.UUID, data: CameraCreate) -> Camera:
         project = await self._repo.get_project_by_id(project_id)
@@ -45,10 +58,14 @@ class MonitoringService:
         await self._ensure_project_exists(project_id)
         return list(await self._repo.get_cameras_by_project_id(project_id))
 
-    async def update_camera(self, camera_id: uuid.UUID, data: CameraUpdate) -> Camera:
+    async def update_camera(
+        self, camera_id: uuid.UUID, data: CameraUpdate, current_user: User
+    ) -> Camera:
         camera = await self._repo.get_camera_by_id(camera_id)
         if not camera:
             raise EntityNotFoundException(f"Камера {camera_id} не найдена")
+
+        await self._check_camera_permission(camera, current_user)
 
         if data.stream_url is not None:
             camera.stream_url = data.stream_url
@@ -58,20 +75,40 @@ class MonitoringService:
         await self._session.commit()
         return camera
 
-    async def delete_camera(self, camera_id: uuid.UUID) -> None:
+    async def delete_camera(self, camera_id: uuid.UUID, current_user: User) -> None:
         camera = await self._repo.get_camera_by_id(camera_id)
         if not camera:
             raise EntityNotFoundException(f"Камера {camera_id} не найдена")
 
+        await self._check_camera_permission(camera, current_user)
+
         await self._repo.delete_camera(camera)
         await self._session.commit()
 
-    # Приемка кадров от воркера и выдача фронту
+    async def save_uploaded_frame(
+        self, camera_id: uuid.UUID, file: UploadFile
+    ) -> tuple[str, str, str]:
+        camera = await self._repo.get_camera_by_id(camera_id)
+        if not camera:
+            raise EntityNotFoundException(f"Камера {camera_id} не найдена")
+
+        os.makedirs("storage", exist_ok=True)
+        ext = os.path.splitext(file.filename or "")[1].lower() or ".jpg"
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            raise DomainException("Недопустимый формат файла. Разрешены: jpg, jpeg, png, webp")
+
+        filename = f"{uuid.uuid4()}{ext}"
+        file_path = os.path.join("storage", filename)
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        image_url = f"/static/{filename}"
+        return file_path, image_url, filename
 
     async def record_frame(
         self, camera_id: uuid.UUID, data: FrameAnalysisCreate
     ) -> CameraFrameAnalysis:
-        """Воркер присылает результат детекции по кадру"""
         camera = await self._repo.get_camera_by_id(camera_id)
         if not camera:
             raise EntityNotFoundException(f"Камера {camera_id} не найдена")
@@ -100,7 +137,6 @@ class MonitoringService:
         limit: int = 50,
         offset: int = 0,
     ) -> list[FrameAnalysisResponse]:
-        """Фронтенд запрашивает галерею кадров с рамочками техники"""
         await self._ensure_project_exists(project_id)
         frames = await self._repo.list_frames(
             project_id=project_id,
@@ -135,7 +171,6 @@ class MonitoringService:
     async def set_frame_evidence(
         self, frame_id: uuid.UUID, is_saved_for_report: bool
     ) -> CameraFrameAnalysis:
-        """Инженер помечает кадр как доказательство нарушения"""
         frame = await self._repo.get_frame_by_id(frame_id)
         if not frame:
             raise EntityNotFoundException("Кадр не найден")
@@ -144,12 +179,9 @@ class MonitoringService:
         await self._session.commit()
         return frame
 
-    # Приемка и выдача интервальных сводок от воркера
-
     async def record_interval_analytics(
         self, data: IntervalAnalyticsCreate
     ) -> CameraIntervalAnalytics:
-        """Воркер присылает рассчитанную им сводку за 20-30 минут"""
         await self._ensure_project_exists(data.project_id)
 
         summary = (
@@ -165,6 +197,9 @@ class MonitoringService:
             interval_start=data.interval_start,
             interval_end=data.interval_end,
             compliance_status=data.compliance_status,
+            active_equipment_count=data.active_equipment_count,
+            idle_equipment_count=data.idle_equipment_count,
+            required_equipment_count=data.required_equipment_count,
             equipment_summary=summary,
             notes=data.notes,
         )
@@ -175,7 +210,6 @@ class MonitoringService:
     async def list_interval_analytics(
         self, project_id: uuid.UUID, limit: int = 50, offset: int = 0
     ) -> list[CameraIntervalAnalytics]:
-        """Фронтенд запрашивает историю интервалов для графика активности"""
         await self._ensure_project_exists(project_id)
         return list(await self._repo.list_interval_analytics(project_id, limit, offset))
 
@@ -183,7 +217,7 @@ class MonitoringService:
         project = await self._repo.get_project_by_id(project_id)
         if not project:
             raise ProjectNotFoundException(project_id)
-        
+
     async def update_frame_detection(
         self, frame_id: uuid.UUID, data: FrameDetectionUpdate
     ) -> CameraFrameAnalysis:
