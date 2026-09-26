@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 
 from app.db.models import (
     Alert,
@@ -27,6 +27,7 @@ class AlertRepository:
                 selectinload(Alert.resolution),
                 selectinload(Alert.special_status_windows),
                 selectinload(Alert.trigger_frame),
+                joinedload(Alert.project),
             )
         )
         return await self._session.scalar(query)
@@ -34,13 +35,17 @@ class AlertRepository:
     async def get_open_alert_by_trigger(
         self, project_id: uuid.UUID, schedule_id: uuid.UUID | None, trigger_type: str
     ) -> Alert | None:
-        """Поиск открытого алерта для дедупликации"""
+        """Поиск открытого алерта для дедупликации с правильной обработкой NULL"""
         query = select(Alert).where(
             Alert.project_id == project_id,
-            Alert.schedule_id == schedule_id,
             Alert.trigger_type == trigger_type,
             Alert.status == "OPEN",
         )
+        if schedule_id is None:
+            query = query.where(Alert.schedule_id.is_(None))
+        else:
+            query = query.where(Alert.schedule_id == schedule_id)
+
         return await self._session.scalar(query)
 
     async def list_alerts(
@@ -72,13 +77,33 @@ class AlertRepository:
         return await self._session.scalar(query)
 
     async def get_alerts_ready_to_escalate(self, now: datetime) -> Sequence[Alert]:
-        """Все открытые желтые алерты, у которых наступил escalate_at"""
-        query = select(Alert).where(
-            Alert.severity == "YELLOW",
-            Alert.status == "OPEN",
-            Alert.escalate_at.is_not(None),
-            Alert.escalate_at <= now,
+        """
+        Сразу подгружаем связанный проект через joinedload, чтобы не делать SELECT в цикле!
+        """
+        query = (
+            select(Alert)
+            .options(joinedload(Alert.project))
+            .where(
+                Alert.severity == "YELLOW",
+                Alert.status == "OPEN",
+                Alert.escalate_at.is_not(None),
+                Alert.escalate_at <= now,
+            )
         )
+        return (await self._session.scalars(query)).all()
+
+    async def get_open_alerts_by_project(
+        self, project_id: uuid.UUID, exclude_alert_id: uuid.UUID | None = None
+    ) -> Sequence[Alert]:
+        """ 
+        Выбирает все оставшиеся открытые алерты проекта для честного пересчета светофора.
+        """
+        query = select(Alert).where(
+            Alert.project_id == project_id,
+            Alert.status == "OPEN",
+        )
+        if exclude_alert_id:
+            query = query.where(Alert.id != exclude_alert_id)
         return (await self._session.scalars(query)).all()
 
     async def get_project_settings(self, project_id: uuid.UUID) -> SystemSetting | None:

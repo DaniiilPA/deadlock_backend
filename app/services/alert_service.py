@@ -18,16 +18,7 @@ from app.db.models import (
     SpecialStatusWindow,
 )
 from app.repositories.alert_repo import AlertRepository
-from app.schemas.alerts import AlertTriggerRequest, AlertResolveRequest
-
-
-# Централизованная матрица таймаутов (без хардкода в методах)
-DEFAULT_ESCALATION_HOURS = {
-    "EQUIPMENT_IDLE": 4,          # Простой техники - 4 часа
-    "UNMONITORED_ZONE": 24,       # Слепая зона - 24 часа
-    "EQUIPMENT_MISSING": 48,      # Нехватка техники - 48 часов (или из настроек ОКС)
-}
-DEFAULT_FALLBACK_HOURS = 48
+from app.schemas import AlertResolveRequest, AlertTriggerRequest
 
 
 class AlertService:
@@ -39,19 +30,16 @@ class AlertService:
         self._session = session
         self._repo = alert_repo or AlertRepository(session)
 
-    async def trigger_alert(
-        self,
-        data: AlertTriggerRequest,
-        custom_escalate_at: datetime | None = None,
-    ) -> Alert:
+    async def trigger_alert(self, data: AlertTriggerRequest) -> Alert:
         """
-        Фиксация инцидента. Используется воркером при детекции нарушений.
+        Фиксация инцидента воркером или алгоритмом.
+        Если data.escalation_hours is None -> алерт НИКОГДА не перейдет в RED (escalate_at = None).
         """
         project = await self._repo.get_project_by_id(data.project_id)
         if not project:
             raise ProjectNotFoundException(data.project_id)
 
-        # Защита от дублей (проверка по нашему индексу uq_open_alert_per_stage_trigger)
+        # Защита от дублей (учитывает случай schedule_id IS NULL)
         existing = await self._repo.get_open_alert_by_trigger(
             project_id=data.project_id,
             schedule_id=data.schedule_id,
@@ -62,20 +50,10 @@ class AlertService:
 
         now = datetime.now(timezone.utc)
 
-        # Определение времени эскалации (если алерт Желтый)
+        # Расчет времени эскалации (полностью контролируется вызывающей стороной)
         escalate_at = None
-        if data.severity == "YELLOW":
-            if custom_escalate_at:
-                escalate_at = custom_escalate_at
-            else:
-                # Получаем таймаут под тип нарушения
-                hours = DEFAULT_ESCALATION_HOURS.get(data.trigger_type, DEFAULT_FALLBACK_HOURS)
-                # Если это нехватка техники, то проверяем индивидуальные настройки стройки
-                if data.trigger_type == "EQUIPMENT_MISSING":
-                    settings = await self._repo.get_project_settings(data.project_id)
-                    if settings:
-                        hours = settings.yellow_to_red_timeout_hours
-                escalate_at = now + timedelta(hours=hours)
+        if data.severity == "YELLOW" and data.escalation_hours is not None:
+            escalate_at = now + timedelta(hours=data.escalation_hours)
 
         alert = Alert(
             project_id=data.project_id,
@@ -90,7 +68,7 @@ class AlertService:
         )
         self._repo.add(alert)
 
-        # Переключение светофора стройки
+        # Обновление светофора объекта
         if data.severity == "RED":
             project.current_alert_level = "RED"
         elif data.severity == "YELLOW" and project.current_alert_level != "RED":
@@ -103,7 +81,9 @@ class AlertService:
 
     async def check_and_escalate_alerts(self) -> list[uuid.UUID]:
         """
-        Инструмент для воркера: находит протухшие желтые алерты и переводит их в RED.
+        Инструмент для фонового воркера:
+        Находит все открытые YELLOW алерты, у которых наступил escalate_at,
+        и переводит их в RED (проект подгружен через joinedload, N+1 исключен).
         """
         now = datetime.now(timezone.utc)
         alerts_to_escalate = await self._repo.get_alerts_ready_to_escalate(now)
@@ -113,7 +93,7 @@ class AlertService:
             alert.severity = "RED"
             alert.yellow_escalated_to_red_at = now
 
-            project = await self._repo.get_project_by_id(alert.project_id)
+            project = alert.project
             if project:
                 project.current_alert_level = "RED"
 
@@ -141,7 +121,10 @@ class AlertService:
         data: AlertResolveRequest,
     ) -> Alert:
         """
-        Решение инженера по красному алерту (3 сценария).
+        Решение инженера по красному алерту (3 регламентных пути):
+        1. FALSE_ALARM   -> ложная тревога (честный пересчет оставшихся открытых алертов).
+        2. PURPLE_STATUS -> ввод режима ожидания документов (окно SpecialStatusWindow).
+        3. ORANGE_STATUS -> ввод режима нагона плана (окно SpecialStatusWindow).
         """
         alert = await self._repo.get_alert_by_id(alert_id)
         if not alert:
@@ -150,12 +133,13 @@ class AlertService:
         if alert.status != "OPEN":
             raise DomainException("Алерт уже закрыт")
 
-        project = await self._repo.get_project_by_id(alert.project_id)
+        project = alert.project or await self._repo.get_project_by_id(alert.project_id)
         if not project:
             raise ProjectNotFoundException(alert.project_id)
 
         now = datetime.now(timezone.utc)
 
+        # Фиксация решения инженера
         resolution = AlertResolution(
             alert_id=alert.id,
             engineer_id=engineer_id,
@@ -169,19 +153,28 @@ class AlertService:
         alert.status = "RESOLVED"
         alert.resolved_at = now
 
-        # Регламентные действия
+        # Обработка сценариев
         if data.action_taken == "FALSE_ALARM":
-            # Сброс в нормальный режим
-            project.current_alert_level = "GREEN"
-            project.yellow_alert_started_at = None
+            remaining = await self._repo.get_open_alerts_by_project(
+                project_id=project.id, exclude_alert_id=alert.id
+            )
+            if any(a.severity == "RED" for a in remaining):
+                project.current_alert_level = "RED"
+            elif any(a.severity == "YELLOW" for a in remaining):
+                project.current_alert_level = "YELLOW"
+            else:
+                project.current_alert_level = "GREEN"
+                project.yellow_alert_started_at = None
 
         elif data.action_taken in ("PURPLE_STATUS", "ORANGE_STATUS"):
             if not data.target_deadline:
-                raise DomainException("Для специального статуса необходимо указать дедлайн (target_deadline)")
+                raise DomainException(
+                    "Для специального статуса необходимо указать дедлайн (target_deadline)"
+                )
 
             status_type = "PURPLE" if data.action_taken == "PURPLE_STATUS" else "ORANGE"
             project.current_special_status = status_type
-            project.current_alert_level = "GREEN"  # Тревога снята, объект перешел в спецрежим
+            project.current_alert_level = "GREEN"  # Тревога снята, проект перешел в спецрежим
 
             window = SpecialStatusWindow(
                 project_id=project.id,
@@ -195,6 +188,7 @@ class AlertService:
             )
             self._repo.add(window)
 
+        # Запись в аудит
         audit = AuditTrail(
             project_id=project.id,
             user_id=engineer_id,
@@ -231,8 +225,6 @@ class AlertService:
     async def get_active_alert(self, project_id: uuid.UUID) -> Alert | None:
         return await self._repo.get_active_alert_by_project(project_id)
 
-    # Управление спецстатусами
-
     async def get_current_special_status(
         self, project_id: uuid.UUID
     ) -> SpecialStatusWindow | None:
@@ -242,7 +234,7 @@ class AlertService:
     async def close_special_status(
         self, window_id: uuid.UUID, engineer_id: uuid.UUID, close_comment: str
     ) -> SpecialStatusWindow:
-        """Инженер вручную закрывает окно спецстатуса"""
+        """Инженер вручную закрывает окно специального статуса"""
         window = await self._repo.get_special_window_by_id(window_id)
         if not window:
             raise EntityNotFoundException("Окно специального статуса не найдено")
@@ -280,14 +272,18 @@ class AlertService:
         responsible_party: str | None,
         summary_meta: dict[str, Any],
     ) -> OrangeStatusReport:
-        """Инженер фиксирует разбор по оранжевому статусу"""
+        """
+        Инженер сохраняет результаты разбора полетов (Post-Mortem) по оранжевому статусу.
+        Сервис просто фиксирует факт отчета и аудит, не производя скрытых переключений статуса.
+        """
         window = await self._repo.get_special_window_by_id(window_id)
         if not window:
             raise EntityNotFoundException("Окно специального статуса не найдено")
 
         if window.type != "ORANGE":
-            raise DomainException("Отчет составляется только для оранжевого статуса")
+            raise DomainException("Отчет разбора составляется только для оранжевого статуса")
 
+        # Сохраняем отчет разбора
         report = OrangeStatusReport(
             special_status_window_id=window.id,
             is_plan_caught_up=is_plan_caught_up,
@@ -297,13 +293,7 @@ class AlertService:
         )
         self._repo.add(report)
 
-        # Если не нагнали, возвращаем проект в красный свет
-        if not is_plan_caught_up:
-            project = await self._repo.get_project_by_id(window.project_id)
-            if project:
-                project.current_alert_level = "RED"
-
-        # Логируем
+        # Логируем действие в аудит
         audit = AuditTrail(
             project_id=window.project_id,
             user_id=engineer_id,
@@ -316,6 +306,7 @@ class AlertService:
             },
         )
         self._repo.add(audit)
+
         await self._session.commit()
         return report
 

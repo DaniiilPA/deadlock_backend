@@ -98,7 +98,8 @@ class Alert(Base):
         Index(
             "uq_open_alert_per_stage_trigger",
             "project_id",
-            "schedule_id",
+            # Защита от NULL != NULL в PostgreSQL:
+            text("COALESCE(schedule_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
             "trigger_type",
             unique=True,
             postgresql_where=(text("status = 'OPEN'")),
