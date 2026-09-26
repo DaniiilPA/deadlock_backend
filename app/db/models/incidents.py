@@ -3,7 +3,17 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, Index, ForeignKey, Numeric, String, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,6 +21,7 @@ from .base import Base
 
 if TYPE_CHECKING:
     from .auth import User
+    from .monitoring import CameraFrameAnalysis
     from .projects import Project, ProjectSchedule
 
 
@@ -50,6 +61,12 @@ class Alert(Base):
         nullable=False,
         server_default=func.now(),
     )
+    escalate_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+        index=True,
+    )
     yellow_escalated_to_red_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
@@ -61,6 +78,7 @@ class Alert(Base):
         ForeignKey("camera_frame_analyses.id", ondelete="SET NULL"),
         nullable=True,
         default=None,
+        index=True,
     )
     details: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True, default=None
@@ -68,6 +86,7 @@ class Alert(Base):
 
     project: Mapped["Project"] = relationship(back_populates="alerts")
     schedule: Mapped["ProjectSchedule | None"] = relationship(back_populates="alerts")
+    trigger_frame: Mapped["CameraFrameAnalysis | None"] = relationship()
     resolution: Mapped["AlertResolution | None"] = relationship(
         back_populates="alert", uselist=False, cascade="all, delete-orphan"
     )
@@ -85,6 +104,7 @@ class Alert(Base):
             postgresql_where=(text("status = 'OPEN'")),
         ),
     )
+
 
 class AlertResolution(Base):
     __tablename__ = "alert_resolutions"
