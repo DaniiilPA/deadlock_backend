@@ -35,19 +35,20 @@ class AnalyticsRepository:
     async def get_active_special_status_window(
         self, project_id: uuid.UUID
     ) -> SpecialStatusWindow | None:
-        query = select(SpecialStatusWindow).where(
-            SpecialStatusWindow.project_id == project_id,
-            SpecialStatusWindow.actual_end_time.is_(None),
+        query = (
+            select(SpecialStatusWindow)
+            .where(
+                SpecialStatusWindow.project_id == project_id,
+                SpecialStatusWindow.actual_end_time.is_(None),
+            )
+            .order_by(SpecialStatusWindow.start_time.desc())
+            .limit(1)
         )
         return await self._session.scalar(query)
 
     async def get_latest_intervals_per_camera(
         self, project_id: uuid.UUID, since_datetime: datetime | None = None
     ) -> Sequence[CameraIntervalAnalytics]:
-        """
-        Берет последний аналитический срез по КАЖДОЙ камере проекта.
-        PostgreSQL DISTINCT ON (camera_id) гарантирует ровно 1 свежую запись на каждую камеру.
-        """
         query = select(CameraIntervalAnalytics).where(
             CameraIntervalAnalytics.project_id == project_id
         )

@@ -34,6 +34,7 @@ async def list_alerts(
     current_user: User = Depends(get_current_user),
 ):
     return await service.list_alerts(
+        current_user=current_user,
         project_id=project_id,
         severity=severity,
         status=status,
@@ -52,7 +53,7 @@ async def get_active_alert(
     service: AlertService = Depends(get_alert_service),
     current_user: User = Depends(get_current_user),
 ):
-    return await service.get_active_alert(project_id)
+    return await service.get_active_alert(project_id, current_user)
 
 
 @router.post(
@@ -93,10 +94,10 @@ async def resolve_alert(
     alert_id: uuid.UUID,
     payload: AlertResolveRequest,
     service: AlertService = Depends(get_alert_service),
-    current_user: User = Depends(require_roles("engineer")),  # Только Инженер или Админ
+    current_user: User = Depends(require_roles("engineer")),
 ):
     return await service.resolve_alert(
         alert_id=alert_id,
-        engineer_id=current_user.id,
+        current_user=current_user,
         data=payload,
     )

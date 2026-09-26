@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # Refresh Token & Cookies
     REFRESH_TOKEN_EXPIRE_SECONDS: int = 2592000
     COOKIE_NAME: str = "refresh_token"
-    COOKIE_PATH: str = "/api/auth"
+    COOKIE_PATH: str = "/api/v1/auth"
     COOKIE_SECURE: bool = True
     COOKIE_SAMESITE: str = "strict"
 

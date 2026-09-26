@@ -27,7 +27,7 @@ def get_alert_service(session: AsyncSession = Depends(get_db)) -> AlertService:
 @router.get(
     "/projects/{project_id}/current",
     response_model=SpecialStatusResponse | None,
-    summary="Текущий активный спецстатус ОКС (для виджета на фронте)",
+    summary="Текущий активный спецстатус ОКС",
 )
 async def get_current_special_status(
     project_id: uuid.UUID,
@@ -50,7 +50,7 @@ async def close_special_status(
 ):
     return await service.close_special_status(
         window_id=window_id,
-        engineer_id=current_user.id,
+        current_user=current_user,
         close_comment=payload.close_comment,
     )
 
@@ -68,7 +68,7 @@ async def create_orange_report(
 ):
     return await service.create_orange_report(
         window_id=window_id,
-        engineer_id=current_user.id,
+        current_user=current_user,
         is_plan_caught_up=payload.is_plan_caught_up,
         time_lost_hours=payload.time_lost_hours,
         responsible_party=payload.responsible_party,

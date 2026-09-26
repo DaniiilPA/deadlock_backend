@@ -106,7 +106,8 @@ class ScheduleService:
                 s.status = ScheduleStatusEnum.IN_PROGRESS.value
                 s.actual_start_date = now
                 changed = True
-            elif now > end_dt and s.status == ScheduleStatusEnum.IN_PROGRESS.value:
+
+            if now > end_dt and s.status == ScheduleStatusEnum.IN_PROGRESS.value:
                 s.status = ScheduleStatusEnum.DELAYED.value
                 changed = True
 
@@ -161,14 +162,16 @@ class ScheduleService:
         for item in stages_data:
             if item.id:
                 schedule = await self._repo.get_schedule_by_id(item.id)
-                if schedule and schedule.project_id == project_id:
-                    schedule.stage_name = item.stage_name
-                    schedule.substage_name = item.substage_name
-                    schedule.sequence_order = item.sequence_order
-                    schedule.base_start_date = ensure_utc(item.base_start_date)
-                    schedule.base_end_date = ensure_utc(item.base_end_date)
-                    schedule.phantom_start_date = schedule.base_start_date
-                    schedule.phantom_end_date = schedule.base_end_date
+                if not schedule or schedule.project_id != project_id:
+                    raise ScheduleNotFoundException(item.id)
+
+                schedule.stage_name = item.stage_name
+                schedule.substage_name = item.substage_name
+                schedule.sequence_order = item.sequence_order
+                schedule.base_start_date = ensure_utc(item.base_start_date)
+                schedule.base_end_date = ensure_utc(item.base_end_date)
+                schedule.phantom_start_date = schedule.base_start_date
+                schedule.phantom_end_date = schedule.base_end_date
             else:
                 schedule = ProjectSchedule(
                     project_id=project_id,
@@ -266,6 +269,18 @@ class ScheduleService:
             project = await self._repo.get_project_by_id(project_id)
             if project:
                 project.current_special_status = "NONE"
+                from app.db.models import Alert
+                stmt = select(Alert.severity).where(
+                    Alert.project_id == project_id, Alert.status == "OPEN"
+                )
+                severities = (await self._session.scalars(stmt)).all()
+                if "RED" in severities:
+                    project.current_alert_level = "RED"
+                elif "YELLOW" in severities:
+                    project.current_alert_level = "YELLOW"
+                else:
+                    project.current_alert_level = "GREEN"
+                    project.yellow_alert_started_at = None
 
             active_window = await self._repo.get_active_special_window(project_id)
             if active_window:

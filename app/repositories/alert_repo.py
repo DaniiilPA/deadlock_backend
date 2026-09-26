@@ -35,7 +35,6 @@ class AlertRepository:
     async def get_open_alert_by_trigger(
         self, project_id: uuid.UUID, schedule_id: uuid.UUID | None, trigger_type: str
     ) -> Alert | None:
-        """Поиск открытого алерта для дедупликации с правильной обработкой NULL"""
         query = select(Alert).where(
             Alert.project_id == project_id,
             Alert.trigger_type == trigger_type,
@@ -92,9 +91,6 @@ class AlertRepository:
     async def get_open_alerts_by_project(
         self, project_id: uuid.UUID, exclude_alert_id: uuid.UUID | None = None
     ) -> Sequence[Alert]:
-        """ 
-        Выбирает все оставшиеся открытые алерты проекта для честного пересчета светофора.
-        """
         query = select(Alert).where(
             Alert.project_id == project_id,
             Alert.status == "OPEN",
@@ -118,9 +114,14 @@ class AlertRepository:
     async def get_active_special_window(
         self, project_id: uuid.UUID
     ) -> SpecialStatusWindow | None:
-        query = select(SpecialStatusWindow).where(
-            SpecialStatusWindow.project_id == project_id,
-            SpecialStatusWindow.actual_end_time.is_(None),
+        query = (
+            select(SpecialStatusWindow)
+            .where(
+                SpecialStatusWindow.project_id == project_id,
+                SpecialStatusWindow.actual_end_time.is_(None),
+            )
+            .order_by(SpecialStatusWindow.start_time.desc())
+            .limit(1)
         )
         return await self._session.scalar(query)
 

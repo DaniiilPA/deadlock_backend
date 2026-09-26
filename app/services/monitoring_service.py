@@ -13,7 +13,6 @@ from app.schemas.monitoring import (
     CameraCreate,
     CameraUpdate,
     FrameAnalysisCreate,
-    FrameAnalysisResponse,
     FrameDetectionUpdate,
     IntervalAnalyticsCreate,
 )
@@ -86,11 +85,13 @@ class MonitoringService:
         await self._session.commit()
 
     async def save_uploaded_frame(
-        self, camera_id: uuid.UUID, file: UploadFile
+        self, camera_id: uuid.UUID, file: UploadFile, current_user: User
     ) -> tuple[str, str, str]:
         camera = await self._repo.get_camera_by_id(camera_id)
         if not camera:
             raise EntityNotFoundException(f"Камера {camera_id} не найдена")
+
+        await self._check_camera_permission(camera, current_user)
 
         os.makedirs("storage", exist_ok=True)
         ext = os.path.splitext(file.filename or "")[1].lower() or ".jpg"
@@ -136,44 +137,34 @@ class MonitoringService:
         is_saved_for_report: bool | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[FrameAnalysisResponse]:
+    ) -> list[CameraFrameAnalysis]:
         await self._ensure_project_exists(project_id)
-        frames = await self._repo.list_frames(
-            project_id=project_id,
-            camera_id=camera_id,
-            from_datetime=from_datetime,
-            to_datetime=to_datetime,
-            is_saved_for_report=is_saved_for_report,
-            limit=limit,
-            offset=offset,
+        return list(
+            await self._repo.list_frames(
+                project_id=project_id,
+                camera_id=camera_id,
+                from_datetime=from_datetime,
+                to_datetime=to_datetime,
+                is_saved_for_report=is_saved_for_report,
+                limit=limit,
+                offset=offset,
+            )
         )
 
-        result: list[FrameAnalysisResponse] = []
-        for f in frames:
-            file_name = os.path.basename(f.image_path)
-            image_url = f"/static/{file_name}" if f.image_path else None
-
-            result.append(
-                FrameAnalysisResponse(
-                    id=f.id,
-                    camera_id=f.camera_id,
-                    project_id=f.project_id,
-                    captured_at=f.captured_at,
-                    image_path=f.image_path,
-                    image_url=image_url,
-                    is_saved_for_report=f.is_saved_for_report,
-                    detection_result=f.detection_result,
-                    processed_at=f.processed_at,
-                )
-            )
-        return result
-
     async def set_frame_evidence(
-        self, frame_id: uuid.UUID, is_saved_for_report: bool
+        self, frame_id: uuid.UUID, is_saved_for_report: bool, current_user: User
     ) -> CameraFrameAnalysis:
         frame = await self._repo.get_frame_by_id(frame_id)
         if not frame:
             raise EntityNotFoundException("Кадр не найден")
+
+        if "admin" not in current_user.roles:
+            assignment = await self._project_repo.get_assignment(frame.project_id, current_user.id)
+            if not assignment or assignment.role_in_project != "engineer":
+                raise DomainException(
+                    message="Недостаточно прав. Вы не назначены инженером на данный объект строительства",
+                    status_code=403,
+                )
 
         frame.is_saved_for_report = is_saved_for_report
         await self._session.commit()

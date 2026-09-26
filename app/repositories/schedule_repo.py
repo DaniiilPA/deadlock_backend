@@ -70,8 +70,13 @@ class ScheduleRepository:
         self._session.add(entity)
 
     async def get_active_special_window(self, project_id: uuid.UUID) -> SpecialStatusWindow | None:
-        query = select(SpecialStatusWindow).where(
-            SpecialStatusWindow.project_id == project_id,
-            SpecialStatusWindow.actual_end_time.is_(None)
+        query = (
+            select(SpecialStatusWindow)
+            .where(
+                SpecialStatusWindow.project_id == project_id,
+                SpecialStatusWindow.actual_end_time.is_(None)
+            )
+            .order_by(SpecialStatusWindow.start_time.desc())
+            .limit(1)
         )
         return await self._session.scalar(query)

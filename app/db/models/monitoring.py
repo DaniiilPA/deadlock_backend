@@ -1,8 +1,9 @@
+import os
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func, text, Integer
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -92,6 +93,12 @@ class CameraFrameAnalysis(Base):
 
     camera: Mapped["Camera"] = relationship(back_populates="frame_analyses")
     project: Mapped["Project"] = relationship()
+
+    @property
+    def image_url(self) -> str | None:
+        if not self.image_path:
+            return None
+        return f"/static/{os.path.basename(self.image_path)}"
 
 
 class CameraIntervalAnalytics(Base):

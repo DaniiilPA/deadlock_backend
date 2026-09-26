@@ -1,4 +1,3 @@
-import os
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, File, UploadFile, status
@@ -50,7 +49,7 @@ async def get_project_cameras(
     "/projects/{project_id}/cameras",
     response_model=CameraResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Добавление камеры на стройплощадку",
+    summary="Добавление камеры на стройплощадку (Прораб / Инженер объекта / Админ)",
 )
 async def create_camera(
     project_id: uuid.UUID,
@@ -83,7 +82,7 @@ async def update_camera(
 async def delete_camera(
     camera_id: uuid.UUID,
     service: MonitoringService = Depends(get_monitoring_service),
-    current_user: User = Depends(require_roles("admin", "foreman")),
+    current_user: User = Depends(require_roles("admin", "foreman", "engineer")),
 ):
     await service.delete_camera(camera_id, current_user)
     return MessageResponse(message="Камера успешно удалена")
@@ -101,7 +100,7 @@ async def upload_frame(
     service: MonitoringService = Depends(get_monitoring_service),
     current_user: User = Depends(get_current_user),
 ):
-    file_path, image_url, filename = await service.save_uploaded_frame(camera_id, file)
+    file_path, image_url, filename = await service.save_uploaded_frame(camera_id, file, current_user)
     return FrameUploadResponse(
         image_path=file_path,
         image_url=image_url,
@@ -135,18 +134,7 @@ async def update_frame_detection(
     service: MonitoringService = Depends(get_monitoring_service),
     current_user: User = Depends(get_current_user),
 ):
-    frame = await service.update_frame_detection(frame_id, payload)
-    return FrameAnalysisResponse(
-        id=frame.id,
-        camera_id=frame.camera_id,
-        project_id=frame.project_id,
-        captured_at=frame.captured_at,
-        image_path=frame.image_path,
-        image_url=f"/static/{os.path.basename(frame.image_path)}" if frame.image_path else None,
-        is_saved_for_report=frame.is_saved_for_report,
-        detection_result=frame.detection_result,
-        processed_at=frame.processed_at,
-    )
+    return await service.update_frame_detection(frame_id, payload)
 
 
 @router.get(
@@ -179,7 +167,7 @@ async def list_project_frames(
 @router.patch(
     "/frames/{frame_id}/evidence",
     response_model=MessageResponse,
-    summary="Закрепить кадр как улику нарушения (Инженер)",
+    summary="Закрепить кадр как улику нарушения (Инженер объекта / Админ)",
 )
 async def set_frame_evidence(
     frame_id: uuid.UUID,
@@ -187,7 +175,7 @@ async def set_frame_evidence(
     service: MonitoringService = Depends(get_monitoring_service),
     current_user: User = Depends(require_roles("engineer")),
 ):
-    await service.set_frame_evidence(frame_id, payload.is_saved_for_report)
+    await service.set_frame_evidence(frame_id, payload.is_saved_for_report, current_user)
     return MessageResponse(message="Статус улики успешно обновлен")
 
 
