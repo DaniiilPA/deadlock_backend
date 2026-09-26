@@ -56,6 +56,15 @@ class Alert(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    trigger_frame_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("camera_frame_analyses.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    details: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, default=None
+    )
 
     project: Mapped["Project"] = relationship(back_populates="alerts")
     schedule: Mapped["ProjectSchedule | None"] = relationship(back_populates="alerts")
