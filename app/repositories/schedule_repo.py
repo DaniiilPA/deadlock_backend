@@ -29,7 +29,12 @@ class ScheduleRepository:
         return list((await self._session.scalars(query)).all())
 
     async def get_schedule_by_id(self, schedule_id: uuid.UUID) -> ProjectSchedule | None:
-        return await self._session.get(ProjectSchedule, schedule_id)
+        query = (
+            select(ProjectSchedule)
+            .where(ProjectSchedule.id == schedule_id)
+            .options(selectinload(ProjectSchedule.equipment_requirements))
+        )
+        return await self._session.scalar(query)
 
     async def get_schedules_by_project_id(self, project_id: uuid.UUID) -> list[ProjectSchedule]:
         query = (

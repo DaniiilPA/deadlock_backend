@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.db.models import (
     Alert,
@@ -124,6 +124,19 @@ class AlertRepository:
             .limit(1)
         )
         return await self._session.scalar(query)
+
+    async def get_expired_special_windows(
+        self, now: datetime
+    ) -> Sequence[SpecialStatusWindow]:
+        query = (
+            select(SpecialStatusWindow)
+            .options(joinedload(SpecialStatusWindow.project))
+            .where(
+                SpecialStatusWindow.actual_end_time.is_(None),
+                SpecialStatusWindow.target_deadline <= now,
+            )
+        )
+        return (await self._session.scalars(query)).unique().all()
 
     async def list_orange_reports(
         self, project_id: uuid.UUID

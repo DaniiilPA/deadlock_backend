@@ -134,22 +134,39 @@ class ScheduleService:
         return current
 
     async def start_stage_manually(self, schedule_id: uuid.UUID) -> ProjectSchedule:
-        schedule = await self._repo.get_schedule_by_id(schedule_id)
-        if not schedule:
+        target_schedule = await self._repo.get_schedule_by_id(schedule_id)
+        if not target_schedule:
             raise ScheduleNotFoundException(schedule_id)
 
         now = datetime.now(timezone.utc)
-        schedule.status = ScheduleStatusEnum.IN_PROGRESS.value
-        schedule.actual_start_date = now
+        schedules = await self._repo.get_schedules_by_project_id(target_schedule.project_id)
+
+        for s in schedules:
+            if s.sequence_order < target_schedule.sequence_order and s.status != ScheduleStatusEnum.COMPLETED.value:
+                s.status = ScheduleStatusEnum.COMPLETED.value
+                s.actual_end_date = now
+                audit_prev = AuditTrail(
+                    project_id=s.project_id,
+                    action_type="STAGE_AUTO_COMPLETED_ON_NEXT_START",
+                    new_values={
+                        "schedule_id": str(s.id),
+                        "substage_name": s.substage_name,
+                        "reason": f"Автоматически завершен при ручном старте этапа #{target_schedule.sequence_order}",
+                    },
+                )
+                self._repo.add(audit_prev)
+
+        target_schedule.status = ScheduleStatusEnum.IN_PROGRESS.value
+        target_schedule.actual_start_date = now
 
         audit = AuditTrail(
-            project_id=schedule.project_id,
+            project_id=target_schedule.project_id,
             action_type="STAGE_STARTED_MANUALLY",
-            new_values={"schedule_id": str(schedule.id), "started_at": now.isoformat()},
+            new_values={"schedule_id": str(target_schedule.id), "started_at": now.isoformat()},
         )
         self._repo.add(audit)
         await self._session.commit()
-        return schedule
+        return target_schedule
 
     async def bulk_sync(self, project_id: uuid.UUID, stages_data: list[StageSyncItem]) -> None:
         project = await self._repo.get_project_by_id(project_id)
@@ -254,11 +271,14 @@ class ScheduleService:
             raise InvalidProjectStatusException("Нет незавершенных этапов для сдвига")
 
         shift_delta = timedelta(days=shift_days)
+        now = datetime.now(timezone.utc)
 
         for stage in stages_to_shift:
             if target_timeline == "BASE":
                 stage.base_start_date += shift_delta
                 stage.base_end_date += shift_delta
+                if stage.status == ScheduleStatusEnum.DELAYED.value and ensure_utc(stage.base_end_date) >= now:
+                    stage.status = ScheduleStatusEnum.IN_PROGRESS.value
             else:
                 base_start = stage.phantom_start_date or stage.base_start_date
                 base_end = stage.phantom_end_date or stage.base_end_date
@@ -288,6 +308,9 @@ class ScheduleService:
                 active_window.close_comment = (
                     f"Сдвиг сроков выполнен на {shift_days} дн. Документ: {document_reference or 'б/н'}"
                 )
+
+        if target_timeline == "BASE":
+            await self.sync_stage_statuses(project_id)
 
         last_stage = stages_to_shift[-1]
         audit = AuditTrail(

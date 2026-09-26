@@ -1,4 +1,5 @@
 import os
+import anyio
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -101,12 +102,31 @@ class MonitoringService:
         filename = f"{uuid.uuid4()}{ext}"
         file_path = os.path.join("storage", filename)
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        max_size = 15 * 1024 * 1024
+        chunk_size = 1024 * 1024
+
+        def _write_to_disk():
+            total_bytes = 0
+            try:
+                with open(file_path, "wb") as buffer:
+                    while chunk := file.file.read(chunk_size):
+                        total_bytes += len(chunk)
+                        if total_bytes > max_size:
+                            raise DomainException(
+                                message="Размер загружаемого файла превышает допустимый лимит 15 МБ",
+                                status_code=413,
+                            )
+                        buffer.write(chunk)
+            except Exception:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                raise
+
+        await anyio.to_thread.run_sync(_write_to_disk)
 
         image_url = f"/static/{filename}"
         return file_path, image_url, filename
-
+    
     async def record_frame(
         self, camera_id: uuid.UUID, data: FrameAnalysisCreate
     ) -> CameraFrameAnalysis:

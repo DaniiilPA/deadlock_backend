@@ -1,10 +1,12 @@
 import uuid
 from typing import Sequence
 from sqlalchemy import (
+    and_,
     case,
     cast,
     func,
     Numeric,
+    or_,
     select,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,16 +42,11 @@ class ProjectRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> Sequence[tuple]:
-        """
-        Возвращает кортеж: (Project, current_stage_name, physical_progress_percent, 
-                           min_start_date, max_end_date, critical_alerts_count).
-        """
-        # текущий этап
         current_stage_subq = (
             select(ProjectSchedule.substage_name)
             .where(
                 ProjectSchedule.project_id == Project.id,
-                ProjectSchedule.status.in_(["IN_PROGRESS", "PLANNED"]),
+                ProjectSchedule.status.in_(["IN_PROGRESS", "PLANNED", "DELAYED"]),
             )
             .order_by(ProjectSchedule.sequence_order.asc())
             .limit(1)
@@ -57,7 +54,6 @@ class ProjectRepository:
             .scalar_subquery()
         )
 
-        # открытые красные алерты
         critical_alerts_subq = (
             select(func.count(Alert.id))
             .where(
@@ -69,7 +65,6 @@ class ProjectRepository:
             .scalar_subquery()
         )
 
-        # прогресс выполненных работ (%)
         total_duration = func.sum(
             func.extract("epoch", ProjectSchedule.base_end_date)
             - func.extract("epoch", ProjectSchedule.base_start_date)
@@ -81,21 +76,37 @@ class ProjectRepository:
                     func.extract("epoch", ProjectSchedule.base_end_date)
                     - func.extract("epoch", ProjectSchedule.base_start_date),
                 ),
-                else_=0,
+                (
+                    and_(
+                        ProjectSchedule.status.in_(["IN_PROGRESS", "DELAYED"]),
+                        func.now() > ProjectSchedule.base_start_date,
+                    ),
+                    func.least(
+                        func.extract("epoch", func.now())
+                        - func.extract("epoch", ProjectSchedule.base_start_date),
+                        (
+                            func.extract("epoch", ProjectSchedule.base_end_date)
+                            - func.extract("epoch", ProjectSchedule.base_start_date)
+                        )
+                        * 0.95,
+                    ),
+                ),
+                else_=0.0,
             )
         )
 
         progress_subq = (
             select(
-                case(
-                    (
-                        total_duration > 0,
-                        func.round(
-                            cast((completed_duration * 100.0) / total_duration, Numeric),
-                            1,
+                func.coalesce(
+                    func.round(
+                        cast(
+                            (func.coalesce(completed_duration, 0.0) * 100.0)
+                            / func.nullif(total_duration, 0.0),
+                            Numeric,
                         ),
+                        1,
                     ),
-                    else_=0.0,
+                    0.0,
                 )
             )
             .where(ProjectSchedule.project_id == Project.id)
@@ -103,7 +114,6 @@ class ProjectRepository:
             .scalar_subquery()
         )
 
-        # календарное время (min/max даты)
         min_start_subq = (
             select(func.min(ProjectSchedule.base_start_date))
             .where(ProjectSchedule.project_id == Project.id)
@@ -117,7 +127,6 @@ class ProjectRepository:
             .scalar_subquery()
         )
 
-        # Главный запрос
         query = select(
             Project,
             current_stage_subq.label("current_stage_name"),
@@ -131,9 +140,13 @@ class ProjectRepository:
             user_projects_subq = select(ProjectAssignment.project_id).where(
                 ProjectAssignment.user_id == user_id
             )
-            query = query.where(Project.id.in_(user_projects_subq))
+            query = query.where(
+                or_(
+                    Project.id.in_(user_projects_subq),
+                    Project.creator_id == user_id,
+                )
+            )
 
-        # Фильтры
         if status:
             query = query.where(Project.status == status)
         if alert_level:

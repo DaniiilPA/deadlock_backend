@@ -5,7 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import UnauthorizedException, decode_access_token
-from app.db.models import User
+from app.db.models import SpecialStatusWindow, User
 from app.db.session import get_db
 from app.repositories.project_repo import ProjectRepository
 from app.services.auth_service import AuthService
@@ -14,7 +14,6 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_client_ip(request: Request) -> str | None:
-    """Извлекает IP-адрес клиента с учетом прокси"""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()[:45]
@@ -26,14 +25,12 @@ def get_client_ip(request: Request) -> str | None:
 async def get_auth_service(
     db: Annotated[AsyncSession, Depends(get_db)]
 ) -> AuthService:
-    """Фабрика зависимостей: создает AuthService с текущей сессией БД"""
     return AuthService(session=db)
 
 
 async def get_project_repo(
     db: Annotated[AsyncSession, Depends(get_db)]
 ) -> ProjectRepository:
-    """Фабрика зависимостей: создает ProjectRepository с текущей сессией БД"""
     return ProjectRepository(session=db)
 
 
@@ -41,7 +38,6 @@ async def get_current_user(
     token_auth: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> User:
-    """Защищает роуты: валидирует JWT и возвращает пользователя из БД"""
     if not token_auth:
         raise UnauthorizedException("Отсутствует токен авторизации")
 
@@ -56,10 +52,7 @@ async def get_current_user(
     return await auth_service.get_user_by_id(user_id)
 
 
-#Проверка прав доступа
-
 def require_roles(*allowed_roles: str):
-    """Проверяет глобальные роли пользователя (users.roles)"""
     async def role_checker(
         current_user: Annotated[User, Depends(get_current_user)]
     ) -> User:
@@ -79,9 +72,6 @@ def require_roles(*allowed_roles: str):
 
 
 def require_project_access(*allowed_project_roles: str):
-    """
-    Проверяет доступ к объекту через ProjectRepository.
-    """
     async def access_checker(
         project_id: uuid.UUID,
         current_user: Annotated[User, Depends(get_current_user)],
@@ -90,8 +80,17 @@ def require_project_access(*allowed_project_roles: str):
         if "admin" in current_user.roles:
             return current_user
 
-        assignment = await project_repo.get_assignment(project_id, current_user.id)
+        project = await project_repo.get_by_id(project_id)
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Объект строительства не найден",
+            )
 
+        if project.creator_id == current_user.id:
+            return current_user
+
+        assignment = await project_repo.get_assignment(project_id, current_user.id)
         if not assignment:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -111,3 +110,46 @@ def require_project_access(*allowed_project_roles: str):
         return current_user
 
     return access_checker
+
+
+def require_window_access(*allowed_project_roles: str):
+    async def window_checker(
+        window_id: uuid.UUID,
+        current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> User:
+        if "admin" in current_user.roles:
+            return current_user
+
+        window = await db.get(SpecialStatusWindow, window_id)
+        if not window:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Окно специального статуса не найдено",
+            )
+
+        project_repo = ProjectRepository(db)
+        project = await project_repo.get_by_id(window.project_id)
+        if project and project.creator_id == current_user.id:
+            return current_user
+
+        assignment = await project_repo.get_assignment(window.project_id, current_user.id)
+        if not assignment:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Вы не назначены на данный объект строительства",
+            )
+
+        if (
+            allowed_project_roles
+            and assignment.role_in_project not in allowed_project_roles
+        ):
+            roles_str = ", ".join(allowed_project_roles)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Недостаточно прав на объекте. Требуется роль: {roles_str}",
+            )
+
+        return current_user
+
+    return window_checker

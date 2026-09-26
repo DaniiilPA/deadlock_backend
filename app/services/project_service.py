@@ -111,7 +111,7 @@ class ProjectService:
                 total_span = (max_end - min_start).total_seconds()
                 if total_span > 0 and now > min_start:
                     spent = (now - min_start).total_seconds()
-                    time_elapsed = round(min(max(spent / total_span, 0.0), 1.0) * 100, 1)
+                    time_elapsed = round((spent / total_span) * 100.0, 1)
 
             result.append(
                 ProjectListItemResponse(

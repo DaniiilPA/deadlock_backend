@@ -3,10 +3,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
-    get_current_user,
     get_db,
     require_project_access,
-    require_roles,
+    require_window_access,
 )
 from app.db.models import User
 from app.schemas import (
@@ -46,7 +45,7 @@ async def close_special_status(
     window_id: uuid.UUID,
     payload: SpecialStatusCloseRequest,
     service: AlertService = Depends(get_alert_service),
-    current_user: User = Depends(require_roles("engineer")),
+    current_user: User = Depends(require_window_access("engineer")),
 ):
     return await service.close_special_status(
         window_id=window_id,
@@ -64,7 +63,7 @@ async def create_orange_report(
     window_id: uuid.UUID,
     payload: OrangeStatusReportCreate,
     service: AlertService = Depends(get_alert_service),
-    current_user: User = Depends(require_roles("engineer")),
+    current_user: User = Depends(require_window_access("engineer")),
 ):
     return await service.create_orange_report(
         window_id=window_id,

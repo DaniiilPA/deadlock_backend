@@ -10,16 +10,19 @@ scheduler = AsyncIOScheduler()
 
 
 async def check_escalations_job() -> None:
-    """Каждую минуту проверяет протухшие YELLOW алерты и переводит их в RED"""
+    """Каждую минуту проверяет протухшие YELLOW алерты и истекшие спецстатусы"""
     async with AsyncSessionLocal() as session:
         try:
             alert_service = AlertService(session)
             escalated_ids = await alert_service.check_and_escalate_alerts()
             if escalated_ids:
                 logger.info("Escalated %d alert(s) to RED: %s", len(escalated_ids), escalated_ids)
+
+            expired_window_ids = await alert_service.check_and_expire_special_statuses()
+            if expired_window_ids:
+                logger.info("Auto-expired %d special status window(s): %s", len(expired_window_ids), expired_window_ids)
         except Exception as e:
             logger.error("Error during alert escalation check: %s", e)
-
 
 async def sync_stages_job() -> None:
     """Каждые 5 минут переводит этапы стройки по времени (PLANNED -> IN_PROGRESS -> DELAYED)"""

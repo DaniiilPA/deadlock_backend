@@ -38,3 +38,4 @@ COOKIE_SECURE=False
 docker compose exec app alembic revision --autogenerate -m "initial_schema"
 docker compose exec app alembic upgrade head
 docker compose exec app python seed_db.py
+docker compose exec app python test_all.py

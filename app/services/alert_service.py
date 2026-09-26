@@ -38,6 +38,9 @@ class AlertService:
     async def _check_engineer_permission(self, project_id: uuid.UUID, user: User) -> None:
         if "admin" in user.roles:
             return
+        project = await self._project_repo.get_by_id(project_id)
+        if project and project.creator_id == user.id:
+            return
         assignment = await self._project_repo.get_assignment(project_id, user.id)
         if not assignment or assignment.role_in_project != "engineer":
             raise DomainException(
@@ -351,3 +354,34 @@ class AlertService:
         self, project_id: uuid.UUID
     ) -> list[OrangeStatusReport]:
         return list(await self._repo.list_orange_reports(project_id))
+    
+    async def check_and_expire_special_statuses(self) -> list[uuid.UUID]:
+        now = datetime.now(timezone.utc)
+        expired_windows = await self._repo.get_expired_special_windows(now)
+        expired_ids: list[uuid.UUID] = []
+
+        for window in expired_windows:
+            window.actual_end_time = now
+            window.close_comment = "Срок дедлайна истек. Режим снят автоматически планировщиком."
+
+            project = window.project
+            if project and project.current_special_status == window.type:
+                project.current_special_status = "NONE"
+                await self._recalculate_project_alert_level(project)
+
+            audit = AuditTrail(
+                project_id=window.project_id,
+                action_type="SPECIAL_STATUS_EXPIRED",
+                new_values={
+                    "window_id": str(window.id),
+                    "type": window.type,
+                    "expired_at": now.isoformat(),
+                },
+            )
+            self._repo.add(audit)
+            expired_ids.append(window.id)
+
+        if expired_ids:
+            await self._session.commit()
+
+        return expired_ids
