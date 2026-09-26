@@ -8,7 +8,6 @@ from app.core.exceptions import (
     ScheduleNotFoundException,
     TemplatesNotFoundException,
 )
-from app.core.utils import ensure_utc
 from app.db.models import (
     AuditTrail,
     ProjectSchedule,
@@ -46,7 +45,7 @@ class ScheduleService:
         # Очищаем старые этапы черновика, если они были
         await self._repo.delete_schedules_by_project_id(project_id)
 
-        current_start = ensure_utc(start_date)
+        current_start = start_date
         created_count = 0
 
         for tmpl in templates:
@@ -87,72 +86,17 @@ class ScheduleService:
         if not project:
             raise ProjectNotFoundException(project_id)
 
-        # Актуализируем статусы этапов по календарному времени перед отдачей
-        await self.sync_stage_statuses(project_id)
         return await self._repo.get_schedules_by_project_id(project_id)
 
-    async def sync_stage_statuses(self, project_id: uuid.UUID) -> None:
-        """
-        Автоматический переход этапов по времени:
-        - Если время пришло (now >= base_start_date) и этап был PLANNED -> переводим в IN_PROGRESS
-        - Если время вышло (now > base_end_date) и он все еще IN_PROGRESS -> DELAYED
-        """
-        schedules = await self._repo.get_schedules_by_project_id(project_id)
-        now = datetime.now(timezone.utc)
-        changed = False
+    async def sync_all_active_projects_stages(self) -> None:
+        """Метод для периодического фонового планировщика: актуализирует этапы всех активных строек"""
+        from sqlalchemy import select
+        from app.db.models import Project
 
-        for s in schedules:
-            if s.status == ScheduleStatusEnum.COMPLETED.value:
-                continue
-
-            start_dt = ensure_utc(s.base_start_date)
-            end_dt = ensure_utc(s.base_end_date)
-
-            if now >= start_dt and s.status == ScheduleStatusEnum.PLANNED.value:
-                s.status = ScheduleStatusEnum.IN_PROGRESS.value
-                s.actual_start_date = now
-                changed = True
-            elif now > end_dt and s.status == ScheduleStatusEnum.IN_PROGRESS.value:
-                s.status = ScheduleStatusEnum.DELAYED.value
-                changed = True
-
-        if changed:
-            await self._session.commit()
-
-    async def get_current_stage_requirements(self, project_id: uuid.UUID) -> ProjectSchedule | None:
-        """
-        Эндпоинт-подсказка для ML-воркера: возвращает текущий активный этап и список требуемой техники
-        """
-        await self.sync_stage_statuses(project_id)
-        schedules = await self._repo.get_schedules_by_project_id(project_id)
-
-        current = next(
-            (s for s in schedules if s.status in (ScheduleStatusEnum.IN_PROGRESS.value, ScheduleStatusEnum.DELAYED.value)),
-            None,
-        )
-        if not current:
-            current = next((s for s in schedules if s.status == ScheduleStatusEnum.PLANNED.value), None)
-
-        return current
-
-    async def start_stage_manually(self, schedule_id: uuid.UUID) -> ProjectSchedule:
-        """Ручной старт этапа прорабом/инженером"""
-        schedule = await self._repo.get_schedule_by_id(schedule_id)
-        if not schedule:
-            raise ScheduleNotFoundException(schedule_id)
-
-        now = datetime.now(timezone.utc)
-        schedule.status = ScheduleStatusEnum.IN_PROGRESS.value
-        schedule.actual_start_date = now
-
-        audit = AuditTrail(
-            project_id=schedule.project_id,
-            action_type="STAGE_STARTED_MANUALLY",
-            new_values={"schedule_id": str(schedule.id), "started_at": now.isoformat()},
-        )
-        self._repo.add(audit)
-        await self._session.commit()
-        return schedule
+        stmt = select(Project.id).where(Project.status == "ACTIVE")
+        project_ids = (await self._session.scalars(stmt)).all()
+        for pid in project_ids:
+            await self.sync_stage_statuses(pid)
 
     async def bulk_sync(self, project_id: uuid.UUID, stages_data: list[StageSyncItem]) -> None:
         project = await self._repo.get_project_by_id(project_id)
@@ -169,20 +113,20 @@ class ScheduleService:
                     schedule.stage_name = item.stage_name
                     schedule.substage_name = item.substage_name
                     schedule.sequence_order = item.sequence_order
-                    schedule.base_start_date = ensure_utc(item.base_start_date)
-                    schedule.base_end_date = ensure_utc(item.base_end_date)
-                    schedule.phantom_start_date = schedule.base_start_date
-                    schedule.phantom_end_date = schedule.base_end_date
+                    schedule.base_start_date = item.base_start_date
+                    schedule.base_end_date = item.base_end_date
+                    schedule.phantom_start_date = item.base_start_date
+                    schedule.phantom_end_date = item.base_end_date
             else:
                 schedule = ProjectSchedule(
                     project_id=project_id,
                     stage_name=item.stage_name,
                     substage_name=item.substage_name,
                     sequence_order=item.sequence_order,
-                    base_start_date=ensure_utc(item.base_start_date),
-                    base_end_date=ensure_utc(item.base_end_date),
-                    phantom_start_date=ensure_utc(item.base_start_date),
-                    phantom_end_date=ensure_utc(item.base_end_date),
+                    base_start_date=item.base_start_date,
+                    base_end_date=item.base_end_date,
+                    phantom_start_date=item.base_start_date,
+                    phantom_end_date=item.base_end_date,
                     status=ScheduleStatusEnum.PLANNED.value,
                 )
                 self._repo.add(schedule)
@@ -218,7 +162,7 @@ class ScheduleService:
             raise ScheduleNotFoundException(schedule_id)
 
         schedule.status = ScheduleStatusEnum.COMPLETED.value
-        schedule.actual_end_date = ensure_utc(actual_end_date)
+        schedule.actual_end_date = actual_end_date
 
         audit = AuditTrail(
             project_id=schedule.project_id,
@@ -226,7 +170,7 @@ class ScheduleService:
             new_values={
                 "schedule_id": str(schedule.id),
                 "substage_name": schedule.substage_name,
-                "actual_end_date": schedule.actual_end_date.isoformat(),
+                "actual_end_date": actual_end_date.isoformat(),
                 "comment": foreman_comment,
             },
         )

@@ -31,3 +31,10 @@ COOKIE_SAMESITE=strict
 #   иначе браузер откажется сохранять куку
 # - Для Production (с HTTPS) обязательно ставить True
 COOKIE_SECURE=False
+
+
+
+
+docker compose exec app alembic revision --autogenerate -m "initial_schema"
+docker compose exec app alembic upgrade head
+docker compose exec app python seed_db.py

@@ -77,9 +77,6 @@ class AlertRepository:
         return await self._session.scalar(query)
 
     async def get_alerts_ready_to_escalate(self, now: datetime) -> Sequence[Alert]:
-        """
-        Сразу подгружаем связанный проект через joinedload, чтобы не делать SELECT в цикле!
-        """
         query = (
             select(Alert)
             .options(joinedload(Alert.project))

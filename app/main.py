@@ -12,44 +12,42 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.security import AppException
 from app.db.session import engine
-from app.db.models import Base
+from app.tasks.scheduler import start_scheduler, stop_scheduler
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Старт: создаем папку под статику и проверяем БД
     os.makedirs("storage", exist_ok=True)
-    logger.info("Проверка подключения к бд")
+    logger.info("Проверка подключения к БД...")
     try:
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Успешное подключение к бд")
+        logger.info("Успешное подключение к БД")
     except Exception as e:
-        logger.critical(f"Не удалось подключиться к бд: {e}")
-        raise e  
+        logger.critical("Не удалось подключиться к БД: %s", e)
+        raise e
+
+    # Запуск фонового планировщика
+    start_scheduler()
 
     yield
 
     # Остановка
-    logger.info("Закрытие пула с бд")
+    stop_scheduler()
+    logger.info("Закрытие пула соединений с БД...")
     await engine.dispose()
     logger.info("Пул закрыт")
 
 
-# Инициализация FastAPI приложения
 app = FastAPI(
     title=settings.APP_NAME,
     debug=settings.DEBUG,
     lifespan=lifespan,
 )
 
-
-# CORS
 origins = [
     "http://localhost:3000",
     "http://localhost:5173",
@@ -60,19 +58,14 @@ origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,  # разрешает отправку кук и Bearer-токена
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# Статика
-
 app.mount("/static", StaticFiles(directory="storage"), name="static")
 
-# Ошибки
 
-# Перехватбизнес-ошибок (409, 401 и т.д.)
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
     return JSONResponse(
@@ -87,8 +80,6 @@ async def app_exception_handler(request: Request, exc: AppException):
     )
 
 
-# Перехват стандартных HTTPException (например, 403 из проверки прав или 404)
-# Приводим к формату {"error": {...}}
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
@@ -103,7 +94,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-# Перехват ошибок валидации FastAPI/Pydantic
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     details = []
@@ -129,7 +119,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Подключаем роутер
 app.include_router(api_router)
 
 

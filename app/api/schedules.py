@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user, get_db, require_roles
+from app.api.dependencies import get_db, require_project_access
 from app.core.exceptions import DomainException, EntityNotFoundException
 from app.db.models import User
 from app.schemas import (
@@ -29,13 +29,13 @@ def get_schedule_service(session: AsyncSession = Depends(get_db)) -> ScheduleSer
 @router.post(
     "/{project_id}/schedules/apply-template",
     response_model=ApplyTemplateResponse,
-    summary="Автогенерация графика из шаблона ТЗ (Прораб / Админ)",
+    summary="Автогенерация графика из шаблона ТЗ (Прораб объекта / Админ)",
 )
 async def apply_template(
     project_id: uuid.UUID,
     payload: ApplyTemplateRequest,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(require_roles("foreman")),
+    current_user: User = Depends(require_project_access("foreman")),
 ):
     try:
         count = await service.apply_template(project_id, payload.start_date)
@@ -53,12 +53,12 @@ async def apply_template(
 @router.get(
     "/{project_id}/schedules",
     response_model=list[ScheduleResponse],
-    summary="Получение полного дерева этапов и техники для Ганта",
+    summary="Получение дерева этапов (Любой назначенный на объект / Админ)",
 )
 async def get_schedules(
     project_id: uuid.UUID,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_access()),
 ):
     try:
         return await service.get_schedules(project_id)
@@ -69,13 +69,13 @@ async def get_schedules(
 @router.put(
     "/{project_id}/schedules/bulk-sync",
     response_model=MessageResponse,
-    summary="Пакетное сохранение правок Ганта прорабом (Прораб / Админ)",
+    summary="Пакетное сохранение правок Ганта (Прораб объекта / Админ)",
 )
 async def bulk_sync_schedule(
     project_id: uuid.UUID,
     payload: ScheduleBulkSyncRequest,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(require_roles("foreman")),
+    current_user: User = Depends(require_project_access("foreman")),
 ):
     try:
         await service.bulk_sync(project_id, payload.stages)
@@ -89,12 +89,12 @@ async def bulk_sync_schedule(
 @router.post(
     "/{project_id}/schedules/confirm",
     response_model=MessageResponse,
-    summary="Утверждение графика DRAFT -> ACTIVE (Прораб / Админ)",
+    summary="Утверждение графика DRAFT -> ACTIVE (Прораб объекта / Админ)",
 )
 async def confirm_schedule(
     project_id: uuid.UUID,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(require_roles("foreman")),
+    current_user: User = Depends(require_project_access("foreman")),
 ):
     try:
         await service.confirm_schedule(project_id)
@@ -104,14 +104,15 @@ async def confirm_schedule(
 
 
 @router.post(
-    "/schedules/{schedule_id}/start",
+    "/{project_id}/schedules/{schedule_id}/start",
     response_model=ScheduleResponse,
-    summary="Ручной старт этапа (Прораб / Админ)",
+    summary="Ручной старт этапа (Прораб объекта / Админ)",
 )
 async def start_stage_manually(
+    project_id: uuid.UUID,
     schedule_id: uuid.UUID,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(require_roles("foreman")),
+    current_user: User = Depends(require_project_access("foreman")),
 ):
     try:
         return await service.start_stage_manually(schedule_id)
@@ -120,15 +121,16 @@ async def start_stage_manually(
 
 
 @router.post(
-    "/schedules/{schedule_id}/complete-early",
+    "/{project_id}/schedules/{schedule_id}/complete-early",
     response_model=ScheduleResponse,
-    summary="Досрочное завершение этапа (Прораб / Админ)",
+    summary="Досрочное завершение этапа (Прораб объекта / Админ)",
 )
 async def complete_stage_early(
+    project_id: uuid.UUID,
     schedule_id: uuid.UUID,
     payload: ScheduleCompleteEarlyRequest,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(require_roles("foreman")),
+    current_user: User = Depends(require_project_access("foreman")),
 ):
     try:
         return await service.complete_stage_early(
@@ -143,13 +145,13 @@ async def complete_stage_early(
 @router.post(
     "/{project_id}/schedules/cascade-shift",
     response_model=CascadeShiftResponse,
-    summary="Каскадный сдвиг сроков цепочки этапов (Только Инженер или Админ)",
+    summary="Каскадный сдвиг сроков цепочки этапов (Инженер объекта / Админ)",
 )
 async def cascade_shift(
     project_id: uuid.UUID,
     payload: CascadeShiftRequest,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(require_roles("engineer")),  # Защита по ТЗ!
+    current_user: User = Depends(require_project_access("engineer")),
 ):
     try:
         return await service.cascade_shift(
@@ -176,7 +178,7 @@ async def cascade_shift(
 async def get_current_stage_requirements(
     project_id: uuid.UUID,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_access()),
 ):
     stage = await service.get_current_stage_requirements(project_id)
     if not stage:
