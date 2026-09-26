@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func, text, Integer
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -128,6 +128,15 @@ class CameraIntervalAnalytics(Base):
     )
     interval_end: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
+    )
+    active_equipment_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    idle_equipment_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    required_equipment_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
     )
     equipment_summary: Mapped[list[dict[str, Any]] | dict[str, Any]] = mapped_column(
         JSONB, nullable=False

@@ -90,7 +90,7 @@ class AlertRepository:
                 Alert.escalate_at <= now,
             )
         )
-        return (await self._session.scalars(query)).all()
+        return (await self._session.scalars(query)).unique().all()
 
     async def get_open_alerts_by_project(
         self, project_id: uuid.UUID, exclude_alert_id: uuid.UUID | None = None

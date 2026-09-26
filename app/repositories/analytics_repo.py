@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Sequence
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +21,6 @@ class AnalyticsRepository:
         self._session = session
 
     async def get_project_for_summary(self, project_id: uuid.UUID) -> Project | None:
-        """Подгрузка проекта с этапами и техникой"""
         query = (
             select(Project)
             .where(Project.id == project_id)
@@ -41,27 +41,31 @@ class AnalyticsRepository:
         )
         return await self._session.scalar(query)
 
-    async def get_latest_interval_analytics(
-        self, project_id: uuid.UUID
-    ) -> CameraIntervalAnalytics | None:
-        """Последний интервальный срез работы техники"""
-        query = (
-            select(CameraIntervalAnalytics)
-            .where(CameraIntervalAnalytics.project_id == project_id)
-            .order_by(CameraIntervalAnalytics.interval_end.desc())
-            .limit(1)
+    async def get_latest_intervals_per_camera(
+        self, project_id: uuid.UUID, since_datetime: datetime | None = None
+    ) -> Sequence[CameraIntervalAnalytics]:
+        """
+        Берет последний аналитический срез по КАЖДОЙ камере проекта.
+        PostgreSQL DISTINCT ON (camera_id) гарантирует ровно 1 свежую запись на каждую камеру.
+        """
+        query = select(CameraIntervalAnalytics).where(
+            CameraIntervalAnalytics.project_id == project_id
         )
-        return await self._session.scalar(query)
+        if since_datetime:
+            query = query.where(CameraIntervalAnalytics.interval_end >= since_datetime)
+
+        query = query.distinct(CameraIntervalAnalytics.camera_id).order_by(
+            CameraIntervalAnalytics.camera_id,
+            CameraIntervalAnalytics.interval_end.desc(),
+        )
+        return (await self._session.scalars(query)).all()
 
     async def get_department_counts(self) -> dict[str, int]:
-        """Распределение всех строек города по цветам"""
-        # Считаем светофоры
         alert_query = select(
             Project.current_alert_level, func.count(Project.id)
         ).group_by(Project.current_alert_level)
         alert_counts = dict((await self._session.execute(alert_query)).all())
 
-        # Считаем спецстатусы
         special_query = select(
             Project.current_special_status, func.count(Project.id)
         ).group_by(Project.current_special_status)
@@ -80,7 +84,6 @@ class AnalyticsRepository:
         }
 
     async def get_total_time_lost_hours(self) -> float:
-        """Суммарные часы потерянного времени из штрафных отчетов"""
         query = select(func.coalesce(func.sum(OrangeStatusReport.time_lost_hours), 0.0))
         return float(await self._session.scalar(query) or 0.0)
 
@@ -91,7 +94,6 @@ class AnalyticsRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> Sequence[tuple[AuditTrail, str | None]]:
-        """Журнал действий по объекту с email пользователя"""
         query = (
             select(AuditTrail, User.email)
             .outerjoin(User, User.id == AuditTrail.user_id)

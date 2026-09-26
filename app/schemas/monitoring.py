@@ -26,6 +26,11 @@ class CameraResponse(BaseModel):
 class FrameAnalysisCreate(BaseModel):
     captured_at: datetime
     image_path: str
+    detection_result: dict[str, Any] | None = None  # Воркер может сначала загрузить фото без ML
+    embeddings_data: dict[str, Any] | None = None
+
+
+class FrameDetectionUpdate(BaseModel):
     detection_result: dict[str, Any]
     embeddings_data: dict[str, Any] | None = None
 
@@ -36,7 +41,7 @@ class FrameAnalysisResponse(BaseModel):
     project_id: uuid.UUID
     captured_at: datetime
     image_path: str
-    image_url: str | None = None  # Ссылка вида /static/...
+    image_url: str | None = None
     is_saved_for_report: bool
     detection_result: dict[str, Any] | None = None
     processed_at: datetime | None = None
@@ -62,7 +67,10 @@ class IntervalAnalyticsCreate(BaseModel):
     interval_start: datetime
     interval_end: datetime
     compliance_status: str  # "NORMAL", "WARNING", "VIOLATION"
-    equipment_summary: IntervalEquipmentSummary | dict[str, Any]
+    active_equipment_count: int = 0
+    idle_equipment_count: int = 0
+    required_equipment_count: int = 0
+    equipment_summary: IntervalEquipmentSummary | dict[str, Any] = {}
     notes: str | None = None
 
 
@@ -74,6 +82,9 @@ class IntervalAnalyticsResponse(BaseModel):
     interval_start: datetime
     interval_end: datetime
     compliance_status: str
+    active_equipment_count: int
+    idle_equipment_count: int
+    required_equipment_count: int
     equipment_summary: dict[str, Any] | list[dict[str, Any]]
     notes: str | None
     created_at: datetime

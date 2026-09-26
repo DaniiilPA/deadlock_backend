@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import os 
 from app.api.dependencies import (
     get_current_user,
     get_db,
@@ -20,6 +21,7 @@ from app.schemas import (
     IntervalAnalyticsCreate,
     IntervalAnalyticsResponse,
     MessageResponse,
+    FrameDetectionUpdate,
 )
 from app.services.monitoring_service import MonitoringService
 
@@ -176,3 +178,27 @@ async def list_interval_analytics(
     current_user: User = Depends(require_project_access()),
 ):
     return await service.list_interval_analytics(project_id, limit, offset)
+
+@router.patch(
+    "/frames/{frame_id}/detection",
+    response_model=FrameAnalysisResponse,
+    summary="Сохранение детекции нейросети для ранее загруженного кадра",
+)
+async def update_frame_detection(
+    frame_id: uuid.UUID,
+    payload: FrameDetectionUpdate,
+    service: MonitoringService = Depends(get_monitoring_service),
+    current_user: User = Depends(get_current_user),
+):
+    frame = await service.update_frame_detection(frame_id, payload)
+    return FrameAnalysisResponse(
+        id=frame.id,
+        camera_id=frame.camera_id,
+        project_id=frame.project_id,
+        captured_at=frame.captured_at,
+        image_path=frame.image_path,
+        image_url=f"/static/{os.path.basename(frame.image_path)}" if frame.image_path else None,
+        is_saved_for_report=frame.is_saved_for_report,
+        detection_result=frame.detection_result,
+        processed_at=frame.processed_at,
+    )

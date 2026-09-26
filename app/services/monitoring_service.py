@@ -12,6 +12,7 @@ from app.schemas.monitoring import (
     FrameAnalysisCreate,
     FrameAnalysisResponse,
     IntervalAnalyticsCreate,
+    FrameDetectionUpdate,
 )
 
 
@@ -182,3 +183,17 @@ class MonitoringService:
         project = await self._repo.get_project_by_id(project_id)
         if not project:
             raise ProjectNotFoundException(project_id)
+        
+    async def update_frame_detection(
+        self, frame_id: uuid.UUID, data: FrameDetectionUpdate
+    ) -> CameraFrameAnalysis:
+        frame = await self._repo.get_frame_by_id(frame_id)
+        if not frame:
+            raise EntityNotFoundException(f"Кадр {frame_id} не найден")
+
+        frame.detection_result = data.detection_result
+        frame.embeddings_data = data.embeddings_data
+        frame.processed_at = datetime.now(timezone.utc)
+
+        await self._session.commit()
+        return frame

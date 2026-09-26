@@ -86,3 +86,16 @@ class CascadeShiftResponse(BaseModel):
     old_estimated_completion: datetime
     new_estimated_completion: datetime
     audit_trail_id: uuid.UUID
+    
+class CurrentStageRequirementsResponse(BaseModel):
+    schedule_id: uuid.UUID
+    project_id: uuid.UUID
+    stage_name: str
+    substage_name: str
+    sequence_order: int
+    status: str
+    base_start_date: datetime
+    base_end_date: datetime
+    required_equipment: list[StageEquipmentRequirementResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)    

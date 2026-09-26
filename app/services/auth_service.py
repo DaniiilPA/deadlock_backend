@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.exceptions import EntityNotFoundException
 from app.core.security import (
     EmailAlreadyExistsException,
     InvalidCredentialsException,
@@ -153,4 +154,13 @@ class AuthService:
         user = await self._user_repo.get_active_by_id(user_id)
         if not user:
             raise UnauthorizedException("Пользователь не найден или деактивирован")
+        return user
+    
+    async def update_user_roles(self, email: str, new_roles: list[str]) -> User:
+        user = await self._user_repo.get_by_email(email)
+        if not user:
+            raise EntityNotFoundException(f"Пользователь с email {email} не найден")
+
+        user.roles = new_roles
+        await self._session.commit()
         return user

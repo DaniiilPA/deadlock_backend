@@ -1,7 +1,7 @@
 from typing import Annotated
 from fastapi import APIRouter, Cookie, Depends, Header, Request, Response, status
 
-from app.api.dependencies import get_auth_service, get_client_ip, get_current_user
+from app.api.dependencies import get_auth_service, get_client_ip, get_current_user, require_roles
 from app.core.config import settings
 from app.core.security import delete_refresh_cookie, set_refresh_cookie
 from app.db.models import User
@@ -12,6 +12,7 @@ from app.schemas import (
     UserLoginRequest,
     UserRegisterRequest,
     UserResponse,
+    UserRolesUpdateByEmailRequest,
 )
 from app.services.auth_service import AuthService
 
@@ -116,3 +117,19 @@ async def logout_all(
     await auth_service.revoke_all_sessions(current_user.id)
     delete_refresh_cookie(response)
     return MessageResponse(message="All sessions revoked")
+
+@router.patch(
+    "/users/roles",
+    response_model=UserResponse,
+    summary="Выдача ролей пользователю (Только Департамент / Админ)",
+)
+async def update_user_roles(
+    payload: UserRolesUpdateByEmailRequest,
+    auth_service: Annotated[AuthService, Depends(get_auth_service)],
+    current_user: User = Depends(require_roles("admin")),
+):
+    updated_user = await auth_service.update_user_roles(
+        email=payload.email,
+        new_roles=payload.roles,
+    )
+    return UserResponse.model_validate(updated_user)

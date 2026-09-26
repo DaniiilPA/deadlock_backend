@@ -4,10 +4,15 @@ from decimal import Decimal
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.utils import (
+    ensure_utc,
+)
+
 from app.core.exceptions import (
     DomainException,
     EntityNotFoundException,
     ProjectNotFoundException,
+    
 )
 from app.db.models import (
     Alert,
@@ -31,15 +36,19 @@ class AlertService:
         self._repo = alert_repo or AlertRepository(session)
 
     async def trigger_alert(self, data: AlertTriggerRequest) -> Alert:
-        """
-        Фиксация инцидента воркером или алгоритмом.
-        Если data.escalation_hours is None -> алерт НИКОГДА не перейдет в RED (escalate_at = None).
-        """
         project = await self._repo.get_project_by_id(data.project_id)
         if not project:
             raise ProjectNotFoundException(data.project_id)
 
-        # Защита от дублей (учитывает случай schedule_id IS NULL)
+        # Проверяем, не истек ли активный спецстатус
+        now = datetime.now(timezone.utc)
+        active_window = await self._repo.get_active_special_window(data.project_id)
+        if active_window and ensure_utc(active_window.target_deadline) <= now:
+            # Срок ожидания/нагона истек. Снимаем защиту
+            project.current_special_status = "NONE"
+            active_window = None
+
+        # Защита от дублей открытого алерта
         existing = await self._repo.get_open_alert_by_trigger(
             project_id=data.project_id,
             schedule_id=data.schedule_id,
@@ -48,12 +57,15 @@ class AlertService:
         if existing:
             return existing
 
-        now = datetime.now(timezone.utc)
-
-        # Расчет времени эскалации (полностью контролируется вызывающей стороной)
+        # Расчет времени эскалации
         escalate_at = None
         if data.severity == "YELLOW" and data.escalation_hours is not None:
             escalate_at = now + timedelta(hours=data.escalation_hours)
+
+        # СОХРАНЯЕМ АЛЕРТ В БД ВСЕГДА (Телеметрия пишется 100%)
+        alert_details = data.details or {}
+        if project.current_special_status in ("PURPLE", "ORANGE"):
+            alert_details["recorded_during_special_status"] = project.current_special_status
 
         alert = Alert(
             project_id=data.project_id,
@@ -64,17 +76,21 @@ class AlertService:
             triggered_at=now,
             escalate_at=escalate_at,
             trigger_frame_id=data.trigger_frame_id,
-            details=data.details,
+            details=alert_details,
         )
         self._repo.add(alert)
 
-        # Обновление светофора объекта
-        if data.severity == "RED":
-            project.current_alert_level = "RED"
-        elif data.severity == "YELLOW" and project.current_alert_level != "RED":
-            project.current_alert_level = "YELLOW"
-            if not project.yellow_alert_started_at:
-                project.yellow_alert_started_at = now
+        # ОБНОВЛЕНИЕ СВЕТОФОРА ПРОЕКТА
+        # Если действует спецстатус (ФИОЛЕТОВЫЙ/ОРАНЖЕВЫЙ) - статус проекта НЕ перебивается на тревогу!
+        if project.current_special_status in ("PURPLE", "ORANGE"):
+            pass  # Алерт сохранен в историю, но светофор защищен спецрежимом
+        else:
+            if data.severity == "RED":
+                project.current_alert_level = "RED"
+            elif data.severity == "YELLOW" and project.current_alert_level != "RED":
+                project.current_alert_level = "YELLOW"
+                if not project.yellow_alert_started_at:
+                    project.yellow_alert_started_at = now
 
         await self._session.commit()
         return alert
@@ -83,7 +99,7 @@ class AlertService:
         """
         Инструмент для фонового воркера:
         Находит все открытые YELLOW алерты, у которых наступил escalate_at,
-        и переводит их в RED (проект подгружен через joinedload, N+1 исключен).
+        и переводит их в RED
         """
         now = datetime.now(timezone.utc)
         alerts_to_escalate = await self._repo.get_alerts_ready_to_escalate(now)

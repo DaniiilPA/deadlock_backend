@@ -41,6 +41,7 @@ from .schedules import (
     ScheduleCompleteEarlyRequest,
     CascadeShiftRequest,
     CascadeShiftResponse,
+    CurrentStageRequirementsResponse,
 )
 from .monitoring import (
     CameraCreate,
@@ -53,6 +54,7 @@ from .monitoring import (
     IntervalAnalyticsCreate,
     IntervalAnalyticsResponse,
     TriggerScenarioRequest,
+    FrameDetectionUpdate,
 )
 from .alerts import (
     AlertTriggerRequest,
@@ -114,6 +116,7 @@ __all__ = [
     "ScheduleCompleteEarlyRequest",
     "CascadeShiftRequest",
     "CascadeShiftResponse",
+    "CurrentStageRequirementsResponse",
     # monitoring
     "CameraCreate",
     "CameraUpdate",
@@ -125,6 +128,7 @@ __all__ = [
     "IntervalAnalyticsCreate",
     "IntervalAnalyticsResponse",
     "TriggerScenarioRequest",
+    "FrameDetectionUpdate",
     # alerts
     "AlertTriggerRequest",
     "AlertResolveRequest",
