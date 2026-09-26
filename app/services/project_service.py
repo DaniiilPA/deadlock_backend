@@ -82,11 +82,8 @@ class ProjectService:
         limit: int = 50,
         offset: int = 0,
     ) -> list[ProjectListItemResponse]:
-        """
-        Реестр ОКС с расчетом прогресса, текущего этапа и аварий.
-        """
         is_admin = "admin" in current_user.roles
-        projects = await self._repo.get_projects_for_user(
+        rows = await self._repo.get_projects_registry(
             user_id=current_user.id,
             is_admin=is_admin,
             status=status,
@@ -100,46 +97,21 @@ class ProjectService:
         result: list[ProjectListItemResponse] = []
         now = datetime.now(timezone.utc)
 
-        for proj in projects:
-            schedules = proj.schedules
-            alerts = proj.alerts
+        for row in rows:
+            proj = row[0]
+            stage_name = row[1]
+            physical_progress = float(row[2] or 0.0)
+            min_start = row[3]
+            max_end = row[4]
+            critical_alerts = int(row[5] or 0)
 
-            # Расчет физического прогресса по закрытым этапам
-            total_duration_sec = 0.0
-            completed_duration_sec = 0.0
-            current_stage_name: str | None = None
-
-            sorted_schedules = sorted(schedules, key=lambda s: s.sequence_order)
-
-            for s in sorted_schedules:
-                duration = (s.base_end_date - s.base_start_date).total_seconds()
-                total_duration_sec += duration
-
-                if s.status == "COMPLETED":
-                    completed_duration_sec += duration
-                elif not current_stage_name and s.status in ("IN_PROGRESS", "PLANNED"):
-                    current_stage_name = s.substage_name
-
-            physical_progress = (
-                round((completed_duration_sec / total_duration_sec) * 100, 1)
-                if total_duration_sec > 0
-                else 0.0
-            )
-
-            # Расчет календарного времени стройки
+            # Календарное время: расчет по двум готовым датам
             time_elapsed = 0.0
-            if sorted_schedules:
-                first_start = sorted_schedules[0].base_start_date
-                last_end = sorted_schedules[-1].base_end_date
-                total_span = (last_end - first_start).total_seconds()
-                if total_span > 0 and now > first_start:
-                    spent = (now - first_start).total_seconds()
+            if min_start and max_end:
+                total_span = (max_end - min_start).total_seconds()
+                if total_span > 0 and now > min_start:
+                    spent = (now - min_start).total_seconds()
                     time_elapsed = round(min(max(spent / total_span, 0.0), 1.0) * 100, 1)
-
-            # Количество открытых критических алертов
-            critical_alerts_count = sum(
-                1 for a in alerts if a.severity == "RED" and a.status == "OPEN"
-            )
 
             result.append(
                 ProjectListItemResponse(
@@ -151,10 +123,10 @@ class ProjectService:
                     schedule_status=proj.schedule_status,
                     current_alert_level=proj.current_alert_level,
                     current_special_status=proj.current_special_status,
-                    current_stage_name=current_stage_name,
+                    current_stage_name=stage_name,
                     physical_progress_percent=physical_progress,
                     time_elapsed_percent=time_elapsed,
-                    critical_alerts_count=critical_alerts_count,
+                    critical_alerts_count=critical_alerts,
                     created_at=proj.created_at,
                 )
             )
@@ -170,6 +142,11 @@ class ProjectService:
 
         await self._session.commit()
         return project
+
+    async def get_team(self, project_id: uuid.UUID) -> list[ProjectAssignment]:
+        """Получение списка назначенных на стройку сотрудников"""
+        await self.get_project(project_id)
+        return list(await self._repo.get_project_assignments(project_id))
 
     async def assign_user(
         self, project_id: uuid.UUID, data: ProjectAssignmentCreate
@@ -233,4 +210,16 @@ class ProjectService:
             settings.frame_retention_days = data.frame_retention_days
 
         await self._session.commit()
+        return settings
+    
+    async def get_settings(self, project_id: uuid.UUID) -> SystemSetting:
+        await self.get_project(project_id)
+        settings = await self._repo.get_project_settings(project_id)
+        if not settings:
+            return SystemSetting(
+                project_id=project_id,
+                yellow_to_red_timeout_hours=48,
+                idle_threshold_minutes=30,
+                frame_retention_days=7
+            )
         return settings

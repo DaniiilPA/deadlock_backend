@@ -1,5 +1,5 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
@@ -8,7 +8,6 @@ from app.api.dependencies import (
     require_project_access,
     require_roles,
 )
-from app.core.exceptions import DomainException, EntityNotFoundException
 from app.db.models import User
 from app.schemas import (
     MessageResponse,
@@ -41,12 +40,7 @@ async def create_project(
     service: ProjectService = Depends(get_project_service),
     current_user: User = Depends(require_roles("admin")),
 ):
-    try:
-        return await service.create_project(payload, creator_id=current_user.id)
-    except EntityNotFoundException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
-    except DomainException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
+    return await service.create_project(payload, creator_id=current_user.id)
 
 
 @router.get(
@@ -85,10 +79,7 @@ async def get_project(
     service: ProjectService = Depends(get_project_service),
     current_user: User = Depends(require_project_access()),
 ):
-    try:
-        return await service.get_project(project_id)
-    except EntityNotFoundException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+    return await service.get_project(project_id)
 
 
 @router.patch(
@@ -102,10 +93,20 @@ async def update_project(
     service: ProjectService = Depends(get_project_service),
     current_user: User = Depends(require_roles("admin")),
 ):
-    try:
-        return await service.update_project(project_id, payload)
-    except EntityNotFoundException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+    return await service.update_project(project_id, payload)
+
+
+@router.get(
+    "/{project_id}/assignments",
+    response_model=list[ProjectAssignmentResponse],
+    summary="Список команды, назначенной на стройку",
+)
+async def get_project_team(
+    project_id: uuid.UUID,
+    service: ProjectService = Depends(get_project_service),
+    current_user: User = Depends(require_project_access()),
+):
+    return await service.get_team(project_id)
 
 
 @router.post(
@@ -120,12 +121,7 @@ async def assign_user(
     service: ProjectService = Depends(get_project_service),
     current_user: User = Depends(require_roles("admin")),
 ):
-    try:
-        return await service.assign_user(project_id, payload)
-    except EntityNotFoundException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
-    except DomainException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
+    return await service.assign_user(project_id, payload)
 
 
 @router.delete(
@@ -139,12 +135,21 @@ async def remove_assignment(
     service: ProjectService = Depends(get_project_service),
     current_user: User = Depends(require_roles("admin")),
 ):
-    try:
-        await service.remove_assignment(project_id, assignment_id)
-        return MessageResponse(message="Назначение успешно удалено")
-    except EntityNotFoundException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+    await service.remove_assignment(project_id, assignment_id)
+    return MessageResponse(message="Назначение успешно удалено")
 
+
+@router.get(
+    "/{project_id}/settings",
+    response_model=SystemSettingsResponse,
+    summary="Получение настроек порогов ОКС",
+)
+async def get_project_settings(
+    project_id: uuid.UUID,
+    service: ProjectService = Depends(get_project_service),
+    current_user: User = Depends(require_project_access()),
+):
+    return await service.get_settings(project_id)
 
 @router.put(
     "/{project_id}/settings",
@@ -157,7 +162,4 @@ async def update_project_settings(
     service: ProjectService = Depends(get_project_service),
     current_user: User = Depends(require_project_access("engineer")),
 ):
-    try:
-        return await service.update_settings(project_id, payload)
-    except EntityNotFoundException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+    return await service.update_settings(project_id, payload)
