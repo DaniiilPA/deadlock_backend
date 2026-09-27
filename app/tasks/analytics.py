@@ -111,6 +111,21 @@ async def run_analytics_task():
                             b1 = d1.get("bbox", [0, 0, 0, 0])
                             c1 = np.array([(b1[0] + b1[2]) / 2.0, (b1[1] + b1[3]) / 2.0])
 
+                            w1 = max(float(b1[2] - b1[0]), 1.0)
+                            h1 = max(float(b1[3] - b1[1]), 1.0)
+                            adaptive_threshold = max(10.0, 0.08 * min(w1, h1))
+
+                            max_dist_in_window = 0.0
+                            for mid_frame in cam_frames[1:]:
+                                mid_dets = mid_frame.detection_result or []
+                                for d_mid in mid_dets:
+                                    if d_mid.get("class") == cls_name:
+                                        b_mid = d_mid.get("bbox", [0, 0, 0, 0])
+                                        c_mid = np.array([(b_mid[0] + b_mid[2]) / 2.0, (b_mid[1] + b_mid[3]) / 2.0])
+                                        d_step = float(np.linalg.norm(c1 - c_mid))
+                                        if d_step > max_dist_in_window:
+                                            max_dist_in_window = d_step
+
                             best_idx = None
                             min_dist = float("inf")
 
@@ -127,7 +142,16 @@ async def run_analytics_task():
 
                             if best_idx is not None:
                                 matched_last_indices.add(best_idx)
-                                if min_dist < cfg.idle_pixel_threshold:
+                                d2_matched = last_dets[best_idx]
+                                b2_matched = d2_matched.get("bbox", [0, 0, 0, 0])
+                                w2 = max(float(b2_matched[2] - b2_matched[0]), 1.0)
+                                h2 = max(float(b2_matched[3] - b2_matched[1]), 1.0)
+
+                                ar1 = w1 / h1
+                                ar2 = w2 / h2
+                                ar_diff = abs(ar1 - ar2) / ar1
+
+                                if min_dist < adaptive_threshold and max_dist_in_window < adaptive_threshold and ar_diff < 0.12:
                                     idle_by_class[cls_name] = idle_by_class.get(cls_name, 0) + 1
                                 else:
                                     active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
@@ -169,6 +193,15 @@ async def run_analytics_task():
                                 sim = compute_cosine_similarity(latest_vectors[i], latest_vectors[j])
                                 if sim >= cfg.reid_similarity_threshold:
                                     merged_indices.add(j)
+
+                    for cam_frames_item in frames_by_cam.values():
+                        last_dets_item = cam_frames_item[-1].detection_result or []
+                        cam_class_counts: dict[str, int] = {}
+                        for d in last_dets_item:
+                            c_name = d.get("class", "unknown")
+                            cam_class_counts[c_name] = cam_class_counts.get(c_name, 0) + 1
+                        for c_name, c_cnt in cam_class_counts.items():
+                            detected_unique_counts[c_name] = max(detected_unique_counts.get(c_name, 0), c_cnt)
 
                     total_unique = sum(detected_unique_counts.values())
                     req_map = {r.equipment_type: r.required_count for r in current_stage.equipment_requirements}
