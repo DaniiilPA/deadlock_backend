@@ -1,5 +1,5 @@
 import asyncio
-import json
+import csv
 import logging
 import os
 from sqlalchemy import select
@@ -27,21 +27,84 @@ EQUIPMENT_MAP = {
     "CONCRETE_MIXER": "concrete_mixer",
     "MOBILE_CRANE": "mobile_crane",
     "FLATBED_TRUCK": "truck",
+    "TOWER_CRANE": "tower_crane",
+    "LOADER_CRANE": "loader_crane",
+    "CONCRETE_PUMP": "concrete_pump",
+    "SKID_STEER_LOADER": "skid_steer_loader",
+    "BACKHOE_LOADER": "backhoe_loader",
+    "FRONT_LOADER": "front_loader",
 }
 
-PROJECT_TYPE_MAP = {
-    "RESIDENTIAL": ("residential_building", "Жилой дом", "Многоквартирные жилые здания"),
-    "ADMINISTRATIVE": ("administrative", "Административное здание", "Офисные и муниципальные здания"),
-    "BUSINESS": ("business", "Технопарк и бизнес-центр", "Многофункциональные деловые комплексы"),
-    "EDUCATION": ("school", "Общеобразовательная школа", "Учебные корпуса и спортивные ядра"),
-    "KINDERGARTEN": ("kindergarten", "Детский сад", "Дошкольные образовательные учреждения"),
+PROJECT_TYPE_MAPPING = {
+    "RESIDENTIAL": [
+        ("residential_building", "Жилой дом", "Многоквартирные жилые здания"),
+    ],
+    "ADMINISTRATIVE": [
+        ("administrative", "Административное здание", "Офисные и муниципальные здания"),
+    ],
+    "BUSINESS": [
+        ("business", "Технопарк и бизнес-центр", "Многофункциональные деловые комплексы"),
+        ("parking", "Многоуровневый паркинг", "Гаражи и стояночные комплексы"),
+    ],
+    "EDUCATION": [
+        ("school", "Школа", "Общеобразовательные учреждения"),
+    ],
+    "KINDERGARTEN": [
+        ("kindergarten", "Детский сад", "Дошкольные образовательные учреждения"),
+    ],
+    "HEALTHCARE": [
+        ("hospital", "Больница", "Лечебно-профилактические комплексы"),
+        ("polyclinic", "Поликлиника", "Амбулаторные медицинские центры"),
+    ],
+    "SPORTS_FACILITY": [
+        ("sports_complex", "Спортивный комплекс", "Физкультурно-оздоровительные сооружения и бассейны"),
+    ],
+    "CULTURE": [
+        ("culture", "Объект культуры", "Дома культуры, театры и концертные залы"),
+    ],
+    "ROAD_CONSTRUCTION": [
+        ("road", "Автомобильная дорога", "Дорожно-транспортная инфраструктура"),
+        ("bridge", "Мостовое сооружение", "Мосты, путепроводы и эстакады"),
+    ],
 }
+
+
+def parse_required_equipment(raw_text: str) -> list[dict]:
+    """Парсинг строки вида 'BULLDOZER: 1, DUMP_TRUCK: 2'"""
+    if not raw_text or not raw_text.strip():
+        return []
+    result = []
+    items = raw_text.split(",")
+    for item in items:
+        item = item.strip()
+        if ":" in item:
+            eq_type, count_str = item.split(":", 1)
+            eq_type = eq_type.strip().upper()
+            try:
+                count = int(count_str.strip())
+            except ValueError:
+                count = 1
+            code = EQUIPMENT_MAP.get(eq_type, eq_type.lower())
+            result.append({"equipment_type_code": code, "default_count": count})
+    return result
+
+
+def parse_allowed_equipment(raw_text: str) -> list[str]:
+    """Парсинг строки вида 'EXCAVATOR, DUMP_TRUCK'"""
+    if not raw_text or not raw_text.strip():
+        return []
+    result = []
+    for item in raw_text.split(","):
+        item = item.strip().upper()
+        if item:
+            code = EQUIPMENT_MAP.get(item, item.lower())
+            result.append(code)
+    return result
 
 
 async def seed() -> None:
     logger.info("Запуск сидирования базы данных...")
     async with AsyncSessionLocal() as session:
-        #Базовые пользователи
         users_data = [
             ("admin@build.ru", "admin12345", "Сергей", "Собянин", ["admin"]),
             ("engineer@build.ru", "engineer123", "Иван", "Инженеров", ["engineer"]),
@@ -60,7 +123,6 @@ async def seed() -> None:
                 session.add(user)
                 logger.info("Создан пользователь: %s (%s)", email, roles)
 
-        #Все 13 классов техники от ML
         equipment_data = [
             ("excavator", "Экскаватор", ["excavator", "digger"]),
             ("dump_truck", "Самосвал", ["dump_truck", "truck"]),
@@ -82,97 +144,76 @@ async def seed() -> None:
                 session.add(EquipmentType(code=code, name=name, ml_class_names=ml_classes))
                 logger.info("Добавлена техника: %s [%s]", name, code)
 
-        # Типы проектов
-        all_types = [
-            ("school", "Школа", "Общеобразовательные учреждения"),
-            ("kindergarten", "Детский сад", "Дошкольные образовательные учреждения"),
-            ("residential_building", "Жилой дом", "Многоквартирные жилые здания"),
-            ("administrative", "Административное здание", "Офисные и муниципальные здания"),
-            ("business", "Технопарк и бизнес-центр", "Многофункциональные деловые комплексы"),
-            ("hospital", "Больница", "Лечебно-профилактические комплексы"),
-            ("polyclinic", "Поликлиника", "Амбулаторные медицинские центры"),
-            ("sports_complex", "Спортивный комплекс", "Физкультурно-оздоровительные сооружения"),
-            ("road", "Автомобильная дорога", "Дорожно-транспортная инфраструктура"),
-            ("bridge", "Мостовое сооружение", "Мосты, эстакады и путепроводы"),
-            ("parking", "Многоуровневый паркинг", "Гаражи и стояночные комплексы"),
-        ]
-        for code, name, desc in all_types:
-            existing = await session.scalar(select(ProjectType).where(ProjectType.code == code))
-            if not existing:
-                session.add(ProjectType(code=code, name=name, description=desc))
-                logger.info("Добавлен тип проекта: %s (%s)", name, code)
+        for csv_code, type_variants in PROJECT_TYPE_MAPPING.items():
+            for code, name, desc in type_variants:
+                existing = await session.scalar(select(ProjectType).where(ProjectType.code == code))
+                if not existing:
+                    session.add(ProjectType(code=code, name=name, description=desc))
+                    logger.info("Добавлен тип объекта: %s (%s)", name, code)
 
         await session.flush()
 
-        #Загрузка шаблонов из data.json
-        data_file = "data.json"
-        if not os.path.exists(data_file):
-            logger.warning("Файл %s не найден! Шаблоны не загружены.", data_file)
-        else:
-            with open(data_file, "r", encoding="utf-8") as f:
-                stages_data = json.load(f)
+        csv_path = "стройка.csv"
+        if not os.path.exists(csv_path):
+            csv_path = "stages.csv"
 
-            project_type_cache = {}
-            seq_counters = {}
+        if not os.path.exists(csv_path):
+            logger.error("Файл стройка.csv не найден в корне проекта!")
+            return
 
-            for item in stages_data:
-                p_code = item["project_type_code"]
-                db_code = PROJECT_TYPE_MAP.get(p_code, (p_code.lower(),))[0]
+        with open(csv_path, mode="r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
 
-                if db_code not in project_type_cache:
-                    ptype = await session.scalar(select(ProjectType).where(ProjectType.code == db_code))
-                    project_type_cache[db_code] = ptype
+        logger.info("Прочитано %d строк из %s", len(rows), csv_path)
 
-                ptype = project_type_cache.get(db_code)
+        stages_by_type = {}
+        for row in rows:
+            csv_type = row.get("Тип объекта (project_type_code)", "").strip()
+            if not csv_type:
+                continue
+            stages_by_type.setdefault(csv_type, []).append(row)
+
+        for csv_type, stage_rows in stages_by_type.items():
+            db_type_variants = PROJECT_TYPE_MAPPING.get(csv_type, [(csv_type.lower(), csv_type, "")])
+
+            for db_code, _, _ in db_type_variants:
+                ptype = await session.scalar(select(ProjectType).where(ProjectType.code == db_code))
                 if not ptype:
                     continue
+                
+                existing_templates = (await session.scalars(
+                    select(StageTemplate).where(StageTemplate.type_id == ptype.id)
+                )).all()
+                for old in existing_templates:
+                    await session.delete(old)
 
-                seq_counters[db_code] = seq_counters.get(db_code, 0) + 1
-                seq = seq_counters[db_code]
+                for idx, row in enumerate(stage_rows, start=1):
+                    major = row.get("Крупный этап", "").strip()
+                    sub = row.get("Подэтап СМР", "").strip()
+                    duration = int(row.get("Длительность (дней)", "7").strip() or 7)
+                    is_crit = row.get("Критический путь", "").strip().upper() == "TRUE"
+                    req_eq = parse_required_equipment(row.get("Обязательная техника", ""))
+                    allowed_eq = parse_allowed_equipment(row.get("Допустимая техника", ""))
+                    risks = row.get("Контролируемые аномалии и риски (Алерты)", "").strip() or None
 
-                req_eq = []
-                for eq in item.get("required_equipment", []):
-                    code = EQUIPMENT_MAP.get(eq["type"], eq["type"].lower())
-                    req_eq.append({"equipment_type_code": code, "default_count": eq["count"]})
-
-                allowed_eq = [
-                    EQUIPMENT_MAP.get(eq_type, eq_type.lower())
-                    for eq_type in item.get("allowed_equipment", [])
-                ]
-
-                existing_tmpl = await session.scalar(
-                    select(StageTemplate).where(
-                        StageTemplate.type_id == ptype.id,
-                        StageTemplate.sequence_order == seq,
-                    )
-                )
-
-                if not existing_tmpl:
                     tmpl = StageTemplate(
                         type_id=ptype.id,
-                        stage_name=item["major_stage"],
-                        substage_name=item["sub_stage"],
-                        sequence_order=seq,
-                        default_duration_days=item["duration_days"],
-                        is_critical_path=item.get("is_critical_path", False),
+                        stage_name=major,
+                        substage_name=sub,
+                        sequence_order=idx,
+                        default_duration_days=duration,
+                        is_critical_path=is_crit,
                         allowed_equipment=allowed_eq,
-                        alerts_and_risks=item.get("alerts_and_risks"),
+                        alerts_and_risks=risks,
                         default_equipment=req_eq,
                     )
                     session.add(tmpl)
-                else:
-                    existing_tmpl.stage_name = item["major_stage"]
-                    existing_tmpl.substage_name = item["sub_stage"]
-                    existing_tmpl.default_duration_days = item["duration_days"]
-                    existing_tmpl.is_critical_path = item.get("is_critical_path", False)
-                    existing_tmpl.allowed_equipment = allowed_eq
-                    existing_tmpl.alerts_and_risks = item.get("alerts_and_risks")
-                    existing_tmpl.default_equipment = req_eq
 
-            logger.info("Успешно загружено %d этапов из %s", len(stages_data), data_file)
+                logger.info("Загружено %d этапов для типа ОКС: %s", len(stage_rows), db_code)
 
         await session.commit()
-    logger.info("Сидирование базы данных успешно завершено!")
+    logger.info("База успешно наполнена всеми 9 типами строек")
 
 
 if __name__ == "__main__":
