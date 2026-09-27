@@ -109,6 +109,15 @@ class StageTemplate(Base):
     default_equipment: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False
     )
+    is_critical_path: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    allowed_equipment: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("ARRAY[]::varchar[]"), default=list
+    )
+    alerts_and_risks: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

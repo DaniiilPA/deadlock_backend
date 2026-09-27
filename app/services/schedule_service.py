@@ -64,6 +64,9 @@ class ScheduleService:
                 phantom_start_date=current_start,
                 phantom_end_date=current_end,
                 status=ScheduleStatusEnum.PLANNED.value,
+                is_critical_path=tmpl.is_critical_path,
+                allowed_equipment=tmpl.allowed_equipment,
+                alerts_and_risks=tmpl.alerts_and_risks,
             )
             self._repo.add(schedule)
             await self._session.flush()

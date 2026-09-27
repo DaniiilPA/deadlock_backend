@@ -2,8 +2,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func, text
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -173,6 +173,15 @@ class ProjectSchedule(Base):
     )
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text("'PLANNED'"), default="PLANNED"
+    )
+    is_critical_path: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    allowed_equipment: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("ARRAY[]::varchar[]"), default=list
+    )
+    alerts_and_risks: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default=None
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

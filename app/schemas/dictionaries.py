@@ -44,6 +44,9 @@ class StageTemplateResponse(BaseModel):
     sequence_order: int
     default_duration_days: int
     default_equipment: list[dict[str, Any]]
+    is_critical_path: bool = False
+    allowed_equipment: list[str] = []
+    alerts_and_risks: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

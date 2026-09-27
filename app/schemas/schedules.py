@@ -62,6 +62,9 @@ class ScheduleResponse(BaseModel):
     actual_start_date: datetime | None = None
     actual_end_date: datetime | None = None
     status: ScheduleStatusEnum
+    is_critical_path: bool = False
+    allowed_equipment: list[str] = []
+    alerts_and_risks: str | None = None
     equipment_requirements: list[StageEquipmentRequirementResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
