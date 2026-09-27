@@ -64,7 +64,7 @@ services:
       - "8081:8081"
     volumes:
       - .:/app
-    command: uvicorn mockserver.server:app --host 0.0.0.0 --port 8081 --reload
+    command: uvicorn MockServer.server:app --host 0.0.0.0 --port 8081 --reload
 
 volumes:
   postgres_data:

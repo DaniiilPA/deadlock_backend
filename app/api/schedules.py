@@ -112,7 +112,7 @@ async def start_stage_manually(
     project_id: uuid.UUID,
     schedule_id: uuid.UUID,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(require_project_access("foreman")),
+    current_user: User = Depends(require_project_access("engineer")),
 ):
     try:
         return await service.start_stage_manually(schedule_id)
