@@ -45,3 +45,12 @@ celerybeat.pid
 # OS generated files
 .DS_Store
 Thumbs.db
+
+#images
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.svg
+*.webp
+*.bmp
