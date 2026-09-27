@@ -9,6 +9,11 @@ from app.api.dependencies import (
     require_project_access,
     require_roles,
 )
+from app.core.worker_config import (
+    WorkerRuntimeConfig,
+    get_worker_config,
+    save_worker_config,
+)
 from app.db.models import User
 from app.schemas import (
     CameraCreate,
@@ -206,3 +211,27 @@ async def list_interval_analytics(
     current_user: User = Depends(require_project_access()),
 ):
     return await service.list_interval_analytics(project_id, limit, offset)
+
+@router.get(
+    "/monitoring/worker-config",
+    response_model=WorkerRuntimeConfig,
+    summary="Получение текущих настроек видеоаналитики и воркера(НЕ ДОБАВЛЯТЬ НА ФРОНТ)",
+)
+async def get_runtime_worker_config(
+    current_user: User = Depends(get_current_user),
+):
+    """Показывает текущие интервалы опроса, высоту матрицы и активный сценарий."""
+    return get_worker_config()
+
+
+@router.put(
+    "/monitoring/worker-config",
+    response_model=WorkerRuntimeConfig,
+    summary="Изменение параметров воркера на лету(НЕ ДОБАВЛЯТЬ НА ФРОНТ)",
+)
+async def update_runtime_worker_config(
+    payload: WorkerRuntimeConfig,
+    current_user: User = Depends(require_roles("admin")),
+):
+    save_worker_config(payload)
+    return payload

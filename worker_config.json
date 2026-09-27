@@ -1,0 +1,8 @@
+{
+  "capture_interval_sec": 3,
+  "analytics_interval_sec": 6,
+  "window_frames_count": 10,
+  "idle_pixel_threshold": 15.0,
+  "reid_similarity_threshold": 0.78,
+  "demo_scenario": "normal"
+}
