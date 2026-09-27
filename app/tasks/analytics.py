@@ -40,6 +40,7 @@ async def auto_resolve_alert(session, project_id: uuid.UUID, schedule_id: uuid.U
     if open_alert:
         open_alert.status = "RESOLVED"
         open_alert.resolved_at = datetime.now(timezone.utc)
+        await session.flush()
         return True
     return False
 
