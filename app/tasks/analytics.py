@@ -7,6 +7,7 @@ import numpy as np
 from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
 
+from app.core.utils import ensure_utc
 from app.core.worker_config import get_worker_config
 from app.db.models import (
     Alert,
@@ -19,19 +20,13 @@ from app.db.session import AsyncSessionLocal
 from app.ml.model import compute_cosine_similarity
 from app.schemas import AlertTriggerRequest
 from app.services.alert_service import AlertService
+from app.services.schedule_service import ScheduleService
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] [ANALYTICS] %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [ANALYTICS] %(message)s")
 logger = logging.getLogger("analytics")
 
 
-async def auto_resolve_alert_if_exists(session, project_id: uuid.UUID, schedule_id: uuid.UUID, trigger_type: str) -> bool:
-    """
-    Самоисцеление: если нарушение прекратилось, гасит открытый алерт в RESOLVED.
-    Возвращает True, если алерт был закрыт.
-    """
+async def auto_resolve_alert(session, project_id: uuid.UUID, schedule_id: uuid.UUID, trigger_type: str) -> bool:
     stmt = (
         select(Alert)
         .where(
@@ -50,7 +45,7 @@ async def auto_resolve_alert_if_exists(session, project_id: uuid.UUID, schedule_
 
 
 async def run_analytics_task():
-    logger.info("Запущен сервис бизнес-аналитики матрицы и аномалий (Analytics Worker)")
+    logger.info("Analytics worker запущен")
 
     while True:
         cfg = get_worker_config()
@@ -58,6 +53,8 @@ async def run_analytics_task():
         try:
             async with AsyncSessionLocal() as session:
                 alert_service = AlertService(session)
+                schedule_service = ScheduleService(session)
+                now = datetime.now(timezone.utc)
 
                 stmt = (
                     select(Project)
@@ -70,20 +67,16 @@ async def run_analytics_task():
                 projects = (await session.scalars(stmt)).all()
 
                 for project in projects:
+                    await schedule_service.sync_stage_statuses(project.id)
+
                     schedules_sorted = sorted(project.schedules, key=lambda x: x.sequence_order)
-                    current_stage = next(
-                        (s for s in schedules_sorted if s.status in ("IN_PROGRESS", "DELAYED")),
-                        None
-                    )
+                    current_stage = next((s for s in schedules_sorted if s.status in ("IN_PROGRESS", "DELAYED")), None)
                     if not current_stage:
-                        current_stage = next(
-                            (s for s in schedules_sorted if s.status == "PLANNED"),
-                            None
-                        )
+                        current_stage = next((s for s in schedules_sorted if s.status == "PLANNED"), None)
                     if not current_stage:
                         continue
 
-                    needed_frames_limit = cfg.window_frames_count * max(len(project.cameras), 1)
+                    needed_limit = cfg.window_frames_count * max(len(project.cameras), 1)
                     frames_stmt = (
                         select(CameraFrameAnalysis)
                         .where(
@@ -91,7 +84,7 @@ async def run_analytics_task():
                             CameraFrameAnalysis.processed_at.is_not(None),
                         )
                         .order_by(desc(CameraFrameAnalysis.captured_at))
-                        .limit(needed_frames_limit)
+                        .limit(needed_limit)
                     )
                     frames = list(reversed((await session.scalars(frames_stmt)).all()))
                     if len(frames) < 2:
@@ -110,23 +103,33 @@ async def run_analytics_task():
 
                         first_dets = cam_frames[0].detection_result or []
                         last_dets = cam_frames[-1].detection_result or []
+                        matched_last_indices = set()
 
                         for d1 in first_dets:
                             cls_name = d1.get("class", "unknown")
                             b1 = d1.get("bbox", [0, 0, 0, 0])
                             c1 = np.array([(b1[0] + b1[2]) / 2.0, (b1[1] + b1[3]) / 2.0])
 
-                            min_dist = 999999.0
-                            for d2 in last_dets:
+                            best_idx = None
+                            min_dist = float("inf")
+
+                            for idx2, d2 in enumerate(last_dets):
+                                if idx2 in matched_last_indices:
+                                    continue
                                 if d2.get("class") == cls_name:
                                     b2 = d2.get("bbox", [0, 0, 0, 0])
                                     c2 = np.array([(b2[0] + b2[2]) / 2.0, (b2[1] + b2[3]) / 2.0])
                                     dist = float(np.linalg.norm(c1 - c2))
                                     if dist < min_dist:
                                         min_dist = dist
+                                        best_idx = idx2
 
-                            if min_dist < cfg.idle_pixel_threshold:
-                                idle_by_class[cls_name] = idle_by_class.get(cls_name, 0) + 1
+                            if best_idx is not None:
+                                matched_last_indices.add(best_idx)
+                                if min_dist < cfg.idle_pixel_threshold:
+                                    idle_by_class[cls_name] = idle_by_class.get(cls_name, 0) + 1
+                                else:
+                                    active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
                             else:
                                 active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
 
@@ -142,7 +145,9 @@ async def run_analytics_task():
                         embs = last_frame.embeddings_data or []
                         for idx, d in enumerate(dets):
                             vec = embs[idx].get("vector") if idx < len(embs) else []
-                            latest_detections.append(d)
+                            det_dict = dict(d)
+                            det_dict["_cam_id"] = str(cam_id)
+                            latest_detections.append(det_dict)
                             latest_vectors.append(vec)
 
                     detected_unique_counts: dict[str, int] = {}
@@ -158,18 +163,18 @@ async def run_analytics_task():
                         for j in range(i + 1, len(latest_detections)):
                             if j in merged_indices:
                                 continue
-                            if latest_detections[j].get("class") == cls_name:
+                            if (latest_detections[j].get("class") == cls_name and
+                                    latest_detections[j].get("_cam_id") != latest_detections[i].get("_cam_id")):
                                 sim = compute_cosine_similarity(latest_vectors[i], latest_vectors[j])
                                 if sim >= cfg.reid_similarity_threshold:
                                     merged_indices.add(j)
 
                     total_unique = sum(detected_unique_counts.values())
-
                     req_map = {r.equipment_type: r.required_count for r in current_stage.equipment_requirements}
                     allowed_set = set(current_stage.allowed_equipment or [])
                     total_required = sum(req_map.values())
 
-                    interval_record = CameraIntervalAnalytics(
+                    session.add(CameraIntervalAnalytics(
                         project_id=project.id,
                         schedule_id=current_stage.id,
                         camera_id=frames[-1].camera_id,
@@ -185,11 +190,10 @@ async def run_analytics_task():
                             "idle_breakdown": idle_by_class,
                         },
                         compliance_status="NORMAL" if total_idle == 0 else "WARNING",
-                        notes=f"Окно {len(frames)} кадров. Уникальных машин: {total_unique}, простой: {total_idle}",
-                    )
-                    session.add(interval_record)
+                        notes=f"Окно {len(frames)} кадров. Уникальных: {total_unique}, простой: {total_idle}",
+                    ))
 
-                    need_recalc_level = False
+                    need_recalc = False
 
                     if total_idle > 0:
                         await alert_service.trigger_alert(AlertTriggerRequest(
@@ -200,13 +204,13 @@ async def run_analytics_task():
                             trigger_frame_id=frames[-1].id,
                             escalation_hours=24,
                             details={
-                                "message": f"Зафиксирован простой техники ({total_idle} ед.) без движения",
+                                "message": f"Простой техники ({total_idle} ед.)",
                                 "risk_hint": current_stage.alerts_and_risks,
                             }
                         ))
                     else:
-                        if await auto_resolve_alert_if_exists(session, project.id, current_stage.id, "EQUIPMENT_IDLE"):
-                            need_recalc_level = True
+                        if await auto_resolve_alert(session, project.id, current_stage.id, "EQUIPMENT_IDLE"):
+                            need_recalc = True
 
                     for req_type, req_cnt in req_map.items():
                         actual_cnt = detected_unique_counts.get(req_type, 0)
@@ -221,15 +225,15 @@ async def run_analytics_task():
                                 trigger_frame_id=frames[-1].id,
                                 escalation_hours=12,
                                 details={
-                                    "message": f"Нехватка техники: требуется {req_cnt} ед. '{req_type}', обнаружено {actual_cnt}",
+                                    "message": f"Нехватка: нужно {req_cnt} '{req_type}', обнаружено {actual_cnt}",
                                     "is_critical_path": current_stage.is_critical_path,
                                     "risk_hint": current_stage.alerts_and_risks,
                                 }
                             ))
                         else:
-                            if await auto_resolve_alert_if_exists(session, project.id, current_stage.id, trigger_name):
-                                need_recalc_level = True
-                                
+                            if await auto_resolve_alert(session, project.id, current_stage.id, trigger_name):
+                                need_recalc = True
+
                     for det_type in detected_unique_counts.keys():
                         trigger_name = f"MISMATCH_{det_type.upper()}"
                         if det_type not in req_map and det_type not in allowed_set:
@@ -241,13 +245,13 @@ async def run_analytics_task():
                                 trigger_frame_id=frames[-1].id,
                                 escalation_hours=8,
                                 details={
-                                    "message": f"Несогласованная техника на этапе: обнаружен '{det_type}'",
+                                    "message": f"Несогласованная техника: '{det_type}'",
                                     "risk_hint": current_stage.alerts_and_risks,
                                 }
                             ))
                         else:
-                            if await auto_resolve_alert_if_exists(session, project.id, current_stage.id, trigger_name):
-                                need_recalc_level = True
+                            if await auto_resolve_alert(session, project.id, current_stage.id, trigger_name):
+                                need_recalc = True
 
                     for req_type, req_cnt in req_map.items():
                         actual_cnt = detected_unique_counts.get(req_type, 0)
@@ -258,29 +262,29 @@ async def run_analytics_task():
                                 schedule_id=current_stage.id,
                                 severity="YELLOW",
                                 trigger_type=trigger_name,
-                                details={"message": f"Избыток техники: {actual_cnt} ед. при норме {req_cnt}"}
+                                details={"message": f"Избыток техники: {actual_cnt} при норме {req_cnt}"}
                             ))
                         else:
-                            if await auto_resolve_alert_if_exists(session, project.id, current_stage.id, trigger_name):
-                                need_recalc_level = True
+                            if await auto_resolve_alert(session, project.id, current_stage.id, trigger_name):
+                                need_recalc = True
 
-                    if current_stage.status == "PLANNED" and total_active > 0:
+                    stage_start = ensure_utc(current_stage.base_start_date)
+                    if current_stage.status == "PLANNED" and now < stage_start and total_active > 0:
                         await alert_service.trigger_alert(AlertTriggerRequest(
                             project_id=project.id,
                             schedule_id=current_stage.id,
                             severity="RED",
                             trigger_type="WORK_OFF_SCHEDULE",
-                            details={"message": "Зафиксирована работа техники на этапе до официального старта (PLANNED)"}
+                            details={"message": "Работы начаты до календарного старта этапа"}
                         ))
 
-                    if need_recalc_level:
+                    if need_recalc:
                         await alert_service._recalculate_project_alert_level(project)
 
                 await session.commit()
-                logger.info("Матрица окна успешно обсчитана для всех активных строек")
-
+                logger.info("Матрица окна обсчитана")
         except Exception as e:
-            logger.error("Ошибка при расчёте аналитики окна: %s", e)
+            logger.error("Ошибка в analytics task: %s", e)
 
         await asyncio.sleep(cfg.analytics_interval_sec)
 
