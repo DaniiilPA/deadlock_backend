@@ -14,8 +14,8 @@ async def get_frame():
     global frame_idx
 
     images = sorted(
-        glob.glob(os.path.join(DATASET_DIR, "*.jpg"))
-        + glob.glob(os.path.join(DATASET_DIR, "*.png"))
+        glob.glob(os.path.join(DATASET_DIR, "*.png"))
+        + glob.glob(os.path.join(DATASET_DIR, "*.jpg"))
         + glob.glob(os.path.join(DATASET_DIR, "*.jpeg"))
     )
 
@@ -28,4 +28,4 @@ async def get_frame():
     image_path = images[frame_idx % len(images)]
     frame_idx += 1
 
-    return FileResponse(image_path, media_type="image/jpeg")
+    return FileResponse(image_path)
