@@ -35,11 +35,10 @@ COOKIE_SECURE=False
 
 
 
-docker compose exec app alembic revision --autogenerate -m "initial_schema"
+docker compose exec app alembic revision --autogenerate -m ""
 docker compose exec app alembic upgrade head
 docker compose exec app python seed_db.py
 docker compose exec app python test_all.py
 
-docker compose exec app alembic revision --autogenerate -m "add_critical_path_and_allowed_equipment"
-docker compose exec app alembic upgrade head
-docker compose exec app python seed_db.py
+
+http://mock_camera:8081/frame.jpg
