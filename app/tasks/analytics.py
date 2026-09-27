@@ -280,6 +280,7 @@ async def run_analytics_task():
                         ))
 
                     if need_recalc:
+                        await session.flush()
                         await alert_service._recalculate_project_alert_level(project)
 
                 await session.commit()
