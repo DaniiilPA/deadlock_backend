@@ -130,7 +130,7 @@ async def complete_stage_early(
     schedule_id: uuid.UUID,
     payload: ScheduleCompleteEarlyRequest,
     service: ScheduleService = Depends(get_schedule_service),
-    current_user: User = Depends(require_project_access("foreman")),
+    current_user: User = Depends(require_project_access("engineer")),
 ):
     try:
         return await service.complete_stage_early(

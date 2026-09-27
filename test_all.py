@@ -421,13 +421,13 @@ async def main():
 
         res = await client.post(
             f"/projects/{project_id}/schedules/{first_stage_id}/complete-early",
-            headers=foreman_headers,
+            headers=eng_headers,
             json={
                 "actual_end_date": datetime.now(timezone.utc).isoformat(),
-                "foreman_comment": "Закончили раньше срока"
+                "foreman_comment": "Инженер подтвердил досрочное завершение"
             }
         )
-        check("Прораб закрыл этап досрочно (COMPLETED)", res.status_code == 200 and res.json()["status"] == "COMPLETED")
+        check("Инженер досрочно закрыл этап (COMPLETED)", res.status_code == 200 and res.json()["status"] == "COMPLETED")
 
         res = await client.get(f"/projects/{project_id}/live-summary", headers=foreman_headers)
         check("Получение сводки Live Summary", res.status_code == 200)
