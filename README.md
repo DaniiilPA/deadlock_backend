@@ -37,7 +37,7 @@
 
 ---
 
-## Быстрый запуск
+## Start
 
 ### 1. Подготовка окружения
 Создайте в корне проекта файл `.env` со следующими параметрами:
@@ -61,3 +61,7 @@ COOKIE_PATH=/api/v1/auth
 COOKIE_SECURE=False
 COOKIE_SAMESITE=strict
 ```
+
+### 2. Сборка и запуск контейнеров
+
+docker compose up -d --build
