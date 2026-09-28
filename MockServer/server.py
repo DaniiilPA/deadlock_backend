@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 
 app = FastAPI()
 
-DATASET_DIR = os.path.join(os.path.dirname(__file__), "dataset", "case1")
+DATASET_DIR = os.path.join(os.path.dirname(__file__), "dataset")
 frame_idx = 0
 
 
