@@ -25,6 +25,7 @@ from app.services.schedule_service import ScheduleService
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [ANALYTICS] %(message)s")
 logger = logging.getLogger("analytics")
 
+STATIC_EQUIPMENT_CLASSES = {"mobile_crane", "tower_crane"}
 
 async def auto_resolve_alert(session, project_id: uuid.UUID, schedule_id: uuid.UUID, trigger_type: str) -> bool:
     stmt = (
@@ -151,7 +152,9 @@ async def run_analytics_task():
                                 ar2 = w2 / h2
                                 ar_diff = abs(ar1 - ar2) / ar1
 
-                                if min_dist < adaptive_threshold and max_dist_in_window < adaptive_threshold and ar_diff < 0.12:
+                                if cls_name in STATIC_EQUIPMENT_CLASSES:
+                                    active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
+                                elif min_dist < adaptive_threshold and max_dist_in_window < adaptive_threshold and ar_diff < 0.12:
                                     idle_by_class[cls_name] = idle_by_class.get(cls_name, 0) + 1
                                 else:
                                     active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
