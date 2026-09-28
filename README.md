@@ -64,4 +64,6 @@ COOKIE_SAMESITE=strict
 
 ### 2. Сборка и запуск контейнеров
 
+```
 docker compose up -d --build
+```
