@@ -1,44 +1,63 @@
+# Сервис мониторинга строительных площадок (Backend)
 
-# Application Settings
+Бэкенд-сервис и фоновый воркер видеоаналитики для автоматизированного контроля за объектами капитального строительства. Система сопоставляет видеопотоки со стройплощадок с утвержденным календарным планом, контролирует фактическое наличие техники на текущем этапе, фиксирует простои и выявляет регламентные отклонения.
 
-APP_NAME="Auth Service"
+---
+
+## Ссылки на компоненты проекта
+
+* **Репозиторий фронтенда:** [ссылка на фронтенд](https://github.com/...)
+* **Веса модели детекции (best.pt):** [ссылка на скачивание](https://...)
+* **Документация и презентация:** [ссылка на документ](https://...)
+
+---
+
+## Стек технологий
+
+* **Язык разработки:** Python 3.11
+* **Web-фреймворк:** FastAPI, Uvicorn
+* **База данных:** PostgreSQL 16
+* **ORM и миграции:** SQLAlchemy 2.0 (asyncio + asyncpg), Alembic
+* **ML / Computer Vision:** PyTorch, Torchvision, Ultralytics (YOLO)
+* **Фоновые процессы:** APScheduler, Asyncio
+* **Контейнеризация:** Docker, Docker Compose
+
+---
+
+## Архитектура контейнеров
+
+В конфигурации `docker-compose.yml` развернуты 4 сервиса:
+
+| Контейнер | Назначение | Порт |
+| :--- | :--- | :--- |
+| `app` | REST API сервис (бизнес-логика, графики, инциденты) | 8000 |
+| `worker` | Фоновый процесс видеоаналитики и расчета матричных окон | — |
+| `postgres` | База данных PostgreSQL | 5432 |
+| `mock_camera` | Локальный эмулятор камеры (циклическая отдача тестовых кадров) | 8081 |
+
+---
+
+## Быстрый запуск
+
+### 1. Подготовка окружения
+Создайте в корне проекта файл `.env` со следующими параметрами:
+
+```env
+APP_NAME="Construction Monitoring Service"
 DEBUG=True
 
-# Database (PostgreSQL with Asyncpg)
+# Подключение к PostgreSQL
+DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@postgres:5432/app_db
 
-# Формат: postgresql+asyncpg://<USER>:<PASSWORD>@<HOST>:<PORT>/<DB_NAME>
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app_db
-
-
-# Security & JWT Settings
-
-# Сгенерировать надежный ключ можно командой:
-# python -c "import secrets; print(secrets.token_hex(32))"
+# Безопасность и JWT
 JWT_SECRET_KEY=change-this-to-a-very-secret-random-key-at-least-32-chars
 JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_SECONDS=900               # 15 минут
+ACCESS_TOKEN_EXPIRE_SECONDS=900
+REFRESH_TOKEN_EXPIRE_SECONDS=2592000
 
-
-# Cookies & Refresh Token Settings
-
-REFRESH_TOKEN_EXPIRE_SECONDS=2592000          # 30 дней (Max-Age)
+# Настройки сессионных cookie
 COOKIE_NAME=refresh_token
 COOKIE_PATH=/api/v1/auth
-COOKIE_SAMESITE=strict
-
-# ВАЖНО ДЛЯ РАЗРАБОТКИ:
-# - При локальной разработке по обычному HTTP (http://localhost:8000) ставить False, 
-#   иначе браузер откажется сохранять куку
-# - Для Production (с HTTPS) обязательно ставить True
 COOKIE_SECURE=False
-
-
-
-
-docker compose exec app alembic revision --autogenerate -m ""
-docker compose exec app alembic upgrade head
-docker compose exec app python seed_db.py
-docker compose exec app python test_all.py
-
-
-http://mock_camera:8081/frame.jpg
+COOKIE_SAMESITE=strict
+```
