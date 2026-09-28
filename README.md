@@ -64,6 +64,41 @@ COOKIE_SAMESITE=strict
 
 ### 2. Сборка и запуск контейнеров
 
-```
+```bash
 docker compose up -d --build
 ```
+
+### 3. Применение миграций и наполнение базы
+
+Обязательный шаг при первом запуске:
+
+```bash
+docker compose exec app alembic upgrade head
+docker compose exec app python seed_db.py
+```
+
+### 4. Запуск сквозных тестов (Опционально, создаст тестовый объект, который привяжет несуществующую камеру, чтобы удалить docker compose down -v)
+
+```bash
+docker compose exec app python test_all.py
+```
+
+---
+
+### Доступ к сервисам
+
+Swagger UI основного API: http://localhost:8000/docs
+Эмулятор камеры (получение кадра): http://localhost:8081/frame.jpg
+Swagger UI эмулятора: http://localhost:8081/docs
+
+---
+
+### Тестовые учетные записи
+
+Скрипт seed_db.py создает учетные записи со следующими ролями:
+
+| Роль | Email | Пароль | Полномочия |
+| :--- | :--- | :--- | :--- |
+| `Администратор (Департамент)` | admin@build.ru | admin12345 | Создание ОКС, назначение людей, сводный дашборд |
+| `Инженер технадзора` | engineer@build.ru | engineer123 | Реакция на Red-алерты, каскадный сдвиг, штрафы |
+| `Прораб` | foreman@build.ru | foreman123 | Редактирование плана в DRAFT, утверждение, старт этапов | 
