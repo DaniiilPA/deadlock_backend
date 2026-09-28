@@ -192,6 +192,7 @@ class ScheduleService:
                 schedule.base_end_date = ensure_utc(item.base_end_date)
                 schedule.phantom_start_date = schedule.base_start_date
                 schedule.phantom_end_date = schedule.base_end_date
+                schedule.is_critical_path = item.is_critical_path
             else:
                 schedule = ProjectSchedule(
                     project_id=project_id,
@@ -203,6 +204,7 @@ class ScheduleService:
                     phantom_start_date=ensure_utc(item.base_start_date),
                     phantom_end_date=ensure_utc(item.base_end_date),
                     status=ScheduleStatusEnum.PLANNED.value,
+                    is_critical_path=item.is_critical_path,
                 )
                 self._repo.add(schedule)
                 await self._session.flush()

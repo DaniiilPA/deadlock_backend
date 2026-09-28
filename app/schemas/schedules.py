@@ -42,6 +42,7 @@ class StageSyncItem(BaseModel):
     sequence_order: int
     base_start_date: datetime
     base_end_date: datetime
+    is_critical_path: bool = False
     equipment_requirements: list[StageEquipmentRequirementItem] = []
 
 
