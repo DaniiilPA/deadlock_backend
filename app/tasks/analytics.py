@@ -230,6 +230,7 @@ async def run_analytics_task():
                     need_recalc = False
 
                     if total_idle > 0:
+                        idle_list_str = ", ".join(f"{cls_name} ({cnt} шт.)" for cls_name, cnt in idle_by_class.items())
                         await alert_service.trigger_alert(AlertTriggerRequest(
                             project_id=project.id,
                             schedule_id=current_stage.id,
@@ -238,8 +239,9 @@ async def run_analytics_task():
                             trigger_frame_id=frames[-1].id,
                             escalation_hours=24,
                             details={
-                                "message": f"Простой техники ({total_idle} ед.)",
-                                "risk_hint": current_stage.alerts_and_risks,
+                                "message": f"Зафиксирован простой техники: {idle_list_str}",
+                                "idle_equipment": idle_by_class,
+                                "total_idle_count": total_idle,
                             }
                         ))
                     else:
@@ -251,6 +253,7 @@ async def run_analytics_task():
                         trigger_name = f"DEFICIT_{req_type.upper()}"
                         if actual_cnt < req_cnt:
                             sev = "RED" if current_stage.is_critical_path else "YELLOW"
+                            missing_cnt = req_cnt - actual_cnt
                             await alert_service.trigger_alert(AlertTriggerRequest(
                                 project_id=project.id,
                                 schedule_id=current_stage.id,
@@ -259,9 +262,12 @@ async def run_analytics_task():
                                 trigger_frame_id=frames[-1].id,
                                 escalation_hours=12,
                                 details={
-                                    "message": f"Нехватка: нужно {req_cnt} '{req_type}', обнаружено {actual_cnt}",
+                                    "message": f"Дефицит: '{req_type}' требуется {req_cnt} ед., в наличии {actual_cnt} ед. (не хватает {missing_cnt} ед.)",
+                                    "equipment_type": req_type,
+                                    "required_count": req_cnt,
+                                    "detected_count": actual_cnt,
+                                    "missing_count": missing_cnt,
                                     "is_critical_path": current_stage.is_critical_path,
-                                    "risk_hint": current_stage.alerts_and_risks,
                                 }
                             ))
                         else:
@@ -279,8 +285,10 @@ async def run_analytics_task():
                                 trigger_frame_id=frames[-1].id,
                                 escalation_hours=8,
                                 details={
-                                    "message": f"Несогласованная техника: '{det_type}'",
-                                    "risk_hint": current_stage.alerts_and_risks,
+                                    "message": f"На объекте зафиксирована лишняя техника '{det_type}', не предусмотренная регламентом этапа",
+                                    "detected_type": det_type,
+                                    "allowed_equipment": list(allowed_set),
+                                    "required_equipment": list(req_map.keys()),
                                 }
                             ))
                         else:
@@ -291,12 +299,18 @@ async def run_analytics_task():
                         actual_cnt = detected_unique_counts.get(req_type, 0)
                         trigger_name = f"SURPLUS_{req_type.upper()}"
                         if actual_cnt > req_cnt + 2:
+                            surplus_cnt = actual_cnt - req_cnt
                             await alert_service.trigger_alert(AlertTriggerRequest(
                                 project_id=project.id,
                                 schedule_id=current_stage.id,
                                 severity="YELLOW",
                                 trigger_type=trigger_name,
-                                details={"message": f"Избыток техники: {actual_cnt} при норме {req_cnt}"}
+                                details={
+                                    "message": f"Избыток техники '{req_type}': обнаружено {actual_cnt} ед. при плане {req_cnt} ед. (+{surplus_cnt} сверх нормы)",
+                                    "equipment_type": req_type,
+                                    "required_count": req_cnt,
+                                    "detected_count": actual_cnt,
+                                }
                             ))
                         else:
                             if await auto_resolve_alert(session, project.id, current_stage.id, trigger_name):
@@ -309,7 +323,10 @@ async def run_analytics_task():
                             schedule_id=current_stage.id,
                             severity="RED",
                             trigger_type="WORK_OFF_SCHEDULE",
-                            details={"message": "Работы начаты до календарного старта этапа"}
+                            details={
+                                "message": f"Обнаружена работа техники ({total_active} ед.) до планового старта этапа (плановый старт: {stage_start.strftime('%d.%m.%Y')})",
+                                "active_equipment_count": total_active,
+                            }
                         ))
 
                     if need_recalc:
