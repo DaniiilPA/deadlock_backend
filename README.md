@@ -9,7 +9,7 @@
 * **Репозиторий фронтенда:** [ссылка на фронтенд](https://github.com/Finolop/fruit-react)
 * **Веса модели детекции (best.pt):** [ссылка на скачивание](https://drive.google.com/file/d/11dtAIx0FRrGh_5UiG5iteS2lJiVgfobn/view?usp=sharing)
 * **Документация:** [ссылка на документ](https://docs.google.com/document/d/1FuQSR0WItCa34jEABzHTD657Uw9_gnBfRpuuE7bnzmg/edit?tab=t.0)
-* **Презентация:** [ссылка на презентацию](https://docs.google.com/presentation/d/1HzepG9vnnn1-Qrd5DfnPB_0DgxZ5irJAoilvtd_DOX4/edit?slide=id.p#slide=id.p)
+* **Презентация:** [ссылка на презентацию](https://drive.google.com/file/d/1obbHynODKZnOoBgMXJkox6DaHgzxYxGu/view)
 
 ---
 
