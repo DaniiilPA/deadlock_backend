@@ -51,8 +51,8 @@ class AnalyticsService:
 
         current_stage_dto: LiveSummaryStage | None = None
         if current_sched:
-            c_start = ensure_utc(current_sched.base_start_date)
-            c_end = ensure_utc(current_sched.base_end_date)
+            c_start = ensure_utc(current_sched.phantom_start_date or current_sched.base_start_date)
+            c_end = ensure_utc(current_sched.phantom_end_date or current_sched.base_end_date)
             c_duration = max((c_end - c_start).total_seconds(), 1.0)
             days_total = max(int(c_duration // 86400), 1)
 

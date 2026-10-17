@@ -24,6 +24,7 @@ class ApplyTemplateResponse(BaseModel):
 class StageEquipmentRequirementItem(BaseModel):
     equipment_type: str
     required_count: int = Field(1, ge=1)
+    is_required: bool = True
 
 
 class StageEquipmentRequirementResponse(BaseModel):
@@ -31,6 +32,7 @@ class StageEquipmentRequirementResponse(BaseModel):
     schedule_id: uuid.UUID
     equipment_type: str
     required_count: int
+    is_required: bool = True
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,6 +45,9 @@ class StageSyncItem(BaseModel):
     base_start_date: datetime
     base_end_date: datetime
     is_critical_path: bool = False
+    equipment_requirements: list[StageEquipmentRequirementItem] = []
+    is_critical_path: bool = False
+    allowed_equipment: list[str] = []
     equipment_requirements: list[StageEquipmentRequirementItem] = []
 
 

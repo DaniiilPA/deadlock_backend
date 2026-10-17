@@ -19,7 +19,9 @@ from app.db.models import (
 from app.repositories.schedule_repo import ScheduleRepository
 from app.schemas import (
     CascadeShiftResponse,
+    ScheduleResponse,
     ScheduleStatusEnum,
+    StageEquipmentRequirementResponse,
     StageSyncItem,
 )
 
@@ -86,12 +88,65 @@ class ScheduleService:
         await self._session.commit()
         return created_count
 
-    async def get_schedules(self, project_id: uuid.UUID) -> list[ProjectSchedule]:
+    async def get_schedules(self, project_id: uuid.UUID) -> list[ScheduleResponse]:
         project = await self._repo.get_project_by_id(project_id)
         if not project:
             raise ProjectNotFoundException(project_id)
 
-        return await self._repo.get_schedules_by_project_id(project_id)
+        db_schedules = await self._repo.get_schedules_by_project_id(project_id)
+
+        result: list[ScheduleResponse] = []
+        for s in db_schedules:
+            req_list = [
+                StageEquipmentRequirementResponse(
+                    id=r.id,
+                    schedule_id=r.schedule_id,
+                    equipment_type=r.equipment_type,
+                    required_count=r.required_count,
+                    is_required=True,
+                )
+                for r in s.equipment_requirements
+            ]
+
+            for item_str in (s.allowed_equipment or []):
+                if ":" in item_str:
+                    code, cnt_str = item_str.split(":", 1)
+                    count = int(cnt_str) if cnt_str.isdigit() else 1
+                else:
+                    code = item_str
+                    count = 1
+                if not any(r.equipment_type == code for r in req_list):
+                    req_list.append(
+                        StageEquipmentRequirementResponse(
+                            id=uuid.uuid5(s.id, code),
+                            schedule_id=s.id,
+                            equipment_type=code,
+                            required_count=count, 
+                            is_required=False,
+                        )
+                    )
+
+            dto = ScheduleResponse(
+                id=s.id,
+                project_id=s.project_id,
+                stage_name=s.stage_name,
+                substage_name=s.substage_name,
+                sequence_order=s.sequence_order,
+                base_start_date=s.base_start_date,
+                base_end_date=s.base_end_date,
+                phantom_start_date=s.phantom_start_date,
+                phantom_end_date=s.phantom_end_date,
+                actual_start_date=s.actual_start_date,
+                actual_end_date=s.actual_end_date,
+                status=s.status,
+                is_critical_path=s.is_critical_path,
+                allowed_equipment=s.allowed_equipment,
+                alerts_and_risks=s.alerts_and_risks,
+                equipment_requirements=req_list,
+            )
+            result.append(dto)
+
+        return result
 
     async def sync_stage_statuses(self, project_id: uuid.UUID) -> None:
         schedules = await self._repo.get_schedules_by_project_id(project_id)
@@ -180,6 +235,11 @@ class ScheduleService:
             raise InvalidProjectStatusException("Редактировать график можно только в статусе DRAFT")
 
         for item in stages_data:
+            allowed_types = [
+                f"{eq.equipment_type}:{eq.required_count}" if eq.required_count > 1 else eq.equipment_type
+                for eq in item.equipment_requirements if not eq.is_required
+                ]
+
             if item.id:
                 schedule = await self._repo.get_schedule_by_id(item.id)
                 if not schedule or schedule.project_id != project_id:
@@ -193,6 +253,7 @@ class ScheduleService:
                 schedule.phantom_start_date = schedule.base_start_date
                 schedule.phantom_end_date = schedule.base_end_date
                 schedule.is_critical_path = item.is_critical_path
+                schedule.allowed_equipment = allowed_types
             else:
                 schedule = ProjectSchedule(
                     project_id=project_id,
@@ -205,19 +266,21 @@ class ScheduleService:
                     phantom_end_date=ensure_utc(item.base_end_date),
                     status=ScheduleStatusEnum.PLANNED.value,
                     is_critical_path=item.is_critical_path,
+                    allowed_equipment=allowed_types, 
                 )
                 self._repo.add(schedule)
                 await self._session.flush()
 
             await self._repo.delete_equipment_by_schedule_id(schedule.id)
             for eq in item.equipment_requirements:
-                self._repo.add(
-                    StageEquipmentRequirement(
-                        schedule_id=schedule.id,
-                        equipment_type=eq.equipment_type,
-                        required_count=eq.required_count,
+                if eq.is_required:
+                    self._repo.add(
+                        StageEquipmentRequirement(
+                            schedule_id=schedule.id,
+                            equipment_type=eq.equipment_type,
+                            required_count=eq.required_count,
+                        )
                     )
-                )
 
         await self._session.commit()
 

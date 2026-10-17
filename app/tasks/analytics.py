@@ -208,7 +208,7 @@ async def run_analytics_task():
 
                     total_unique = sum(detected_unique_counts.values())
                     req_map = {r.equipment_type: r.required_count for r in current_stage.equipment_requirements}
-                    allowed_set = set(current_stage.allowed_equipment or [])
+                    allowed_set = {x.split(":")[0] for x in (current_stage.allowed_equipment or [])}
                     total_required = sum(req_map.values())
 
                     session.add(CameraIntervalAnalytics(
