@@ -133,3 +133,14 @@ async def update_user_roles(
         new_roles=payload.roles,
     )
     return UserResponse.model_validate(updated_user)
+
+@router.get(
+    "/users",
+    response_model=list[UserResponse],
+    summary="Список пользователей системы (Только Департамент / Админ)",
+)
+async def list_users(
+    auth_service: Annotated[AuthService, Depends(get_auth_service)],
+    current_user: User = Depends(require_roles("admin")),
+):
+    return await auth_service.list_users()

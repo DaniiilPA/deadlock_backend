@@ -2,7 +2,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import User
-
+from typing import Sequence
 
 class UserRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -25,3 +25,7 @@ class UserRepository:
 
     def add(self, user: User) -> None:
         self._session.add(user)
+    
+    async def list_all_active(self) -> Sequence[User]:
+        stmt = select(User).where(User.deleted_at.is_(None)).order_by(User.created_at.desc())
+        return (await self._session.scalars(stmt)).all()

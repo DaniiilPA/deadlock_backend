@@ -151,29 +151,39 @@ class ProjectService:
     async def assign_user(
         self, project_id: uuid.UUID, data: ProjectAssignmentCreate
     ) -> ProjectAssignment:
-        """Привязка прораба или инженера к конкретной стройке"""
+        """Привязка прораба или инженера к конкретной стройке (по UUID или по Email)"""
         project = await self.get_project(project_id)
 
-        target_user = await self._user_repo.get_active_by_id(data.user_id)
-        if not target_user:
-            raise EntityNotFoundException("Пользователь не найден")
+        raw_identifier = data.user_id.strip()
+        target_user = None
 
-        # Проверка соответствия глобальной квалификации и проектной роли
+        if "@" in raw_identifier:
+            target_user = await self._user_repo.get_by_email(raw_identifier)
+        else:
+            try:
+                parsed_uuid = uuid.UUID(raw_identifier)
+                target_user = await self._user_repo.get_active_by_id(parsed_uuid)
+            except ValueError:
+                raise DomainException("Некорректный идентификатор: укажите валидный Email или UUID")
+
+        if not target_user:
+            raise EntityNotFoundException(f"Пользователь '{raw_identifier}' не найден в системе")
+
         if data.role_in_project not in ("foreman", "engineer"):
             raise DomainException("Недопустимая роль. Доступны только: foreman, engineer")
 
         if data.role_in_project not in target_user.roles and "admin" not in target_user.roles:
             raise DomainException(
-                f"У пользователя нет глобальной квалификации '{data.role_in_project}'"
+                f"У пользователя {target_user.email} нет глобальной квалификации '{data.role_in_project}'"
             )
 
-        existing = await self._repo.get_assignment(project.id, data.user_id)
+        existing = await self._repo.get_assignment(project.id, target_user.id)
         if existing:
-            raise DomainException("Пользователь уже назначен на данный объект")
+            raise DomainException(f"Пользователь {target_user.email} уже назначен на данный объект")
 
         assignment = ProjectAssignment(
             project_id=project.id,
-            user_id=data.user_id,
+            user_id=target_user.id,
             role_in_project=data.role_in_project,
         )
         self._repo.add(assignment)

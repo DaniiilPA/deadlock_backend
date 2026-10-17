@@ -15,8 +15,8 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectAssignmentCreate(BaseModel):
-    user_id: uuid.UUID
-    role_in_project: str  # "foreman" или "engineer"
+    user_id: str
+    role_in_project: str 
 
 
 class ProjectAssignmentResponse(BaseModel):

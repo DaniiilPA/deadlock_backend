@@ -164,3 +164,6 @@ class AuthService:
         user.roles = new_roles
         await self._session.commit()
         return user
+    
+    async def list_users(self) -> list[User]:
+        return list(await self._user_repo.list_all_active())
