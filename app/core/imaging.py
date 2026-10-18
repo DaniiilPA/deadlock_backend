@@ -3,6 +3,8 @@ import io
 import os
 from PIL import Image, ImageDraw, ImageFont
 
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
 
 def image_file_to_base64(image_path: str) -> str:
     with open(image_path, "rb") as f:
@@ -15,10 +17,6 @@ def render_annotated_frame(
     detections: list[dict],
     class_name_map: dict[str, str],
 ) -> tuple[str, list[str]]:
-    """
-    Накладывает рамки и русские подписи из БД.
-    Возвращает (annotated_base64, список_уникальных_русских_названий).
-    """
     if not os.path.exists(image_path):
         return "", []
 
@@ -27,11 +25,11 @@ def render_annotated_frame(
         draw = ImageDraw.Draw(annotated)
 
         try:
-            font = ImageFont.load_default(size=18)
-        except TypeError:
+            font = ImageFont.truetype(FONT_PATH, 18)
+        except OSError:
             font = ImageFont.load_default()
 
-        detected_labels = []
+        detected_labels: list[str] = []
 
         for d in detections:
             bbox = d.get("bbox", [])
@@ -57,5 +55,5 @@ def render_annotated_frame(
         buffer = io.BytesIO()
         annotated.save(buffer, format="JPEG", quality=85)
         encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        
+
         return f"data:image/jpeg;base64,{encoded}", list(set(detected_labels))
