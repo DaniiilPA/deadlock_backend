@@ -78,5 +78,19 @@ class MonitoringRepository:
         )
         return (await self._session.scalars(query)).all()
 
+    async def get_latest_frames_for_all_cameras(
+        self, project_id: uuid.UUID
+    ) -> Sequence[CameraFrameAnalysis]:
+        """Возвращает по 1 последнему кадру на каждую камеру объекта"""
+        query = (
+            select(CameraFrameAnalysis)
+            .where(CameraFrameAnalysis.project_id == project_id)
+            .distinct(CameraFrameAnalysis.camera_id)
+            .order_by(CameraFrameAnalysis.camera_id, CameraFrameAnalysis.captured_at.desc())
+        )
+        return (await self._session.scalars(query)).all()
+    
     def add(self, entity) -> None:
         self._session.add(entity)
+        
+    

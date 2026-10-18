@@ -1,4 +1,5 @@
 import uuid
+import base64
 from datetime import datetime
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
@@ -102,3 +103,14 @@ class FrameUploadResponse(BaseModel):
     image_path: str
     image_url: str
     filename: str
+    
+class CameraSnapshotResponse(BaseModel):
+    camera_id: uuid.UUID
+    stream_url: str
+    is_active: bool
+    captured_at: datetime | None = None
+    image_url: str | None = None
+    image_base64: str | None = None
+    detection_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)

@@ -56,6 +56,7 @@ from .monitoring import (
     TriggerScenarioRequest,
     FrameDetectionUpdate,
     FrameUploadResponse,
+    CameraSnapshotResponse,
 )
 from .alerts import (
     AlertTriggerRequest,
@@ -131,6 +132,7 @@ __all__ = [
     "TriggerScenarioRequest",
     "FrameDetectionUpdate",
     "FrameUploadResponse",
+    "CameraSnapshotResponse",
     # alerts
     "AlertTriggerRequest",
     "AlertResolveRequest",

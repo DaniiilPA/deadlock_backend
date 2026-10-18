@@ -27,6 +27,7 @@ from app.schemas import (
     IntervalAnalyticsCreate,
     IntervalAnalyticsResponse,
     MessageResponse,
+    CameraSnapshotResponse,
 )
 from app.services.monitoring_service import MonitoringService
 
@@ -235,3 +236,15 @@ async def update_runtime_worker_config(
 ):
     save_worker_config(payload)
     return payload
+
+@router.get(
+    "/projects/{project_id}/cameras/snapshots",
+    response_model=list[CameraSnapshotResponse],
+    summary="Получение последних снимков со всех камер объекта (в одном запросе)",
+)
+async def get_project_cameras_snapshots(
+    project_id: uuid.UUID,
+    service: MonitoringService = Depends(get_monitoring_service),
+    current_user: User = Depends(require_project_access()),
+):
+    return await service.get_project_cameras_snapshots(project_id)
