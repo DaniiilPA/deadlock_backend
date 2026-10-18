@@ -28,26 +28,6 @@ logger = logging.getLogger("analytics")
 STATIC_EQUIPMENT_CLASSES = {"mobile_crane", "tower_crane"}
 
 
-async def auto_resolve_alert(session, project_id: uuid.UUID, schedule_id: uuid.UUID, trigger_type: str) -> bool:
-    stmt = (
-        select(Alert)
-        .where(
-            Alert.project_id == project_id,
-            Alert.schedule_id == schedule_id,
-            Alert.trigger_type == trigger_type,
-            Alert.status == "OPEN",
-            Alert.severity == "YELLOW",
-        )
-    )
-    open_alert = await session.scalar(stmt)
-    if open_alert:
-        open_alert.status = "RESOLVED"
-        open_alert.resolved_at = datetime.now(timezone.utc)
-        await session.flush()
-        return True
-    return False
-
-
 async def run_analytics_task():
     logger.info("Analytics worker запущен")
 
@@ -74,9 +54,15 @@ async def run_analytics_task():
                     await schedule_service.sync_stage_statuses(project.id)
 
                     schedules_sorted = sorted(project.schedules, key=lambda x: x.sequence_order)
-                    current_stage = next((s for s in schedules_sorted if s.status in ("IN_PROGRESS", "DELAYED")), None)
+                    current_stage = next(
+                        (s for s in schedules_sorted if s.status in ("IN_PROGRESS", "DELAYED")),
+                        None,
+                    )
                     if not current_stage:
-                        current_stage = next((s for s in schedules_sorted if s.status == "PLANNED"), None)
+                        current_stage = next(
+                            (s for s in schedules_sorted if s.status == "PLANNED"),
+                            None,
+                        )
                     if not current_stage:
                         continue
 
@@ -124,7 +110,9 @@ async def run_analytics_task():
                                 for d_mid in mid_dets:
                                     if d_mid.get("class") == cls_name:
                                         b_mid = d_mid.get("bbox", [0, 0, 0, 0])
-                                        c_mid = np.array([(b_mid[0] + b_mid[2]) / 2.0, (b_mid[1] + b_mid[3]) / 2.0])
+                                        c_mid = np.array(
+                                            [(b_mid[0] + b_mid[2]) / 2.0, (b_mid[1] + b_mid[3]) / 2.0]
+                                        )
                                         d_step = float(np.linalg.norm(c1 - c_mid))
                                         if d_step > max_dist_in_window:
                                             max_dist_in_window = d_step
@@ -137,7 +125,9 @@ async def run_analytics_task():
                                     continue
                                 if d2.get("class") == cls_name:
                                     b2 = d2.get("bbox", [0, 0, 0, 0])
-                                    c2 = np.array([(b2[0] + b2[2]) / 2.0, (b2[1] + b2[3]) / 2.0])
+                                    c2 = np.array(
+                                        [(b2[0] + b2[2]) / 2.0, (b2[1] + b2[3]) / 2.0]
+                                    )
                                     dist = float(np.linalg.norm(c1 - c2))
                                     if dist < min_dist:
                                         min_dist = dist
@@ -155,19 +145,33 @@ async def run_analytics_task():
                                 ar_diff = abs(ar1 - ar2) / ar1
 
                                 if cls_name in STATIC_EQUIPMENT_CLASSES:
-                                    active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
-                                elif min_dist < adaptive_threshold and max_dist_in_window < adaptive_threshold and ar_diff < 0.05:
-                                    idle_by_class[cls_name] = idle_by_class.get(cls_name, 0) + 1
+                                    active_by_class[cls_name] = (
+                                        active_by_class.get(cls_name, 0) + 1
+                                    )
+                                elif (
+                                    min_dist < adaptive_threshold
+                                    and max_dist_in_window < adaptive_threshold
+                                    and ar_diff < 0.05
+                                ):
+                                    idle_by_class[cls_name] = (
+                                        idle_by_class.get(cls_name, 0) + 1
+                                    )
                                 else:
-                                    active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
+                                    active_by_class[cls_name] = (
+                                        active_by_class.get(cls_name, 0) + 1
+                                    )
                             else:
-                                active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
+                                active_by_class[cls_name] = (
+                                    active_by_class.get(cls_name, 0) + 1
+                                )
 
                     if active_by_class.get("excavator", 0) > 0:
                         for truck_type in ("dump_truck", "truck"):
                             idle_trucks = idle_by_class.pop(truck_type, 0)
                             if idle_trucks > 0:
-                                active_by_class[truck_type] = active_by_class.get(truck_type, 0) + idle_trucks
+                                active_by_class[truck_type] = (
+                                    active_by_class.get(truck_type, 0) + idle_trucks
+                                )
 
                     total_idle = sum(idle_by_class.values())
                     total_active = sum(active_by_class.values())
@@ -176,8 +180,12 @@ async def run_analytics_task():
                     latest_vectors: list[list[float]] = []
 
                     for cam_id, cam_frames in frames_by_cam.items():
-                        recent_frames = cam_frames[-3:] if len(cam_frames) >= 3 else cam_frames
-                        best_frame = max(recent_frames, key=lambda f: len(f.detection_result or []))
+                        recent_frames = (
+                            cam_frames[-3:] if len(cam_frames) >= 3 else cam_frames
+                        )
+                        best_frame = max(
+                            recent_frames, key=lambda f: len(f.detection_result or [])
+                        )
                         dets = best_frame.detection_result or []
                         embs = best_frame.embeddings_data or []
                         for idx, d in enumerate(dets):
@@ -194,15 +202,22 @@ async def run_analytics_task():
                         if i in merged_indices:
                             continue
                         cls_name = latest_detections[i].get("class", "unknown")
-                        detected_unique_counts[cls_name] = detected_unique_counts.get(cls_name, 0) + 1
+                        detected_unique_counts[cls_name] = (
+                            detected_unique_counts.get(cls_name, 0) + 1
+                        )
                         merged_indices.add(i)
 
                         for j in range(i + 1, len(latest_detections)):
                             if j in merged_indices:
                                 continue
-                            if (latest_detections[j].get("class") == cls_name and
-                                    latest_detections[j].get("_cam_id") != latest_detections[i].get("_cam_id")):
-                                sim = compute_cosine_similarity(latest_vectors[i], latest_vectors[j])
+                            if (
+                                latest_detections[j].get("class") == cls_name
+                                and latest_detections[j].get("_cam_id")
+                                != latest_detections[i].get("_cam_id")
+                            ):
+                                sim = compute_cosine_similarity(
+                                    latest_vectors[i], latest_vectors[j]
+                                )
                                 if sim >= cfg.reid_similarity_threshold:
                                     merged_indices.add(j)
 
@@ -213,14 +228,21 @@ async def run_analytics_task():
                             c_name = d.get("class", "unknown")
                             cam_class_counts[c_name] = cam_class_counts.get(c_name, 0) + 1
                         for c_name, c_cnt in cam_class_counts.items():
-                            detected_unique_counts[c_name] = max(detected_unique_counts.get(c_name, 0), c_cnt)
+                            detected_unique_counts[c_name] = max(
+                                detected_unique_counts.get(c_name, 0), c_cnt
+                            )
 
                     total_unique = sum(detected_unique_counts.values())
-                    req_map = {r.equipment_type: r.required_count for r in current_stage.equipment_requirements}
-                    allowed_set = {x.split(":")[0] for x in (current_stage.allowed_equipment or [])}
+                    req_map = {
+                        r.equipment_type: r.required_count
+                        for r in current_stage.equipment_requirements
+                    }
+                    allowed_set = {
+                        x.split(":")[0] for x in (current_stage.allowed_equipment or [])
+                    }
                     total_required = sum(req_map.values())
 
-                    missing_equipment = {}
+                    missing_equipment: dict[str, dict] = {}
                     for req_type, req_cnt in req_map.items():
                         actual_cnt = detected_unique_counts.get(req_type, 0)
                         if actual_cnt < req_cnt:
@@ -231,11 +253,12 @@ async def run_analytics_task():
                             }
 
                     unauthorized_equipment = [
-                        det for det in detected_unique_counts.keys()
+                        det
+                        for det in detected_unique_counts.keys()
                         if det not in req_map and det not in allowed_set
                     ]
 
-                    surplus_equipment = {}
+                    surplus_equipment: dict[str, int] = {}
                     for req_type, req_cnt in req_map.items():
                         actual_cnt = detected_unique_counts.get(req_type, 0)
                         if actual_cnt > req_cnt + 2:
@@ -243,28 +266,34 @@ async def run_analytics_task():
 
                     stage_start = ensure_utc(current_stage.base_start_date)
                     is_work_off_schedule = (
-                        current_stage.status == "PLANNED" and now < stage_start and total_active > 0
+                        current_stage.status == "PLANNED"
+                        and now < stage_start
+                        and total_active > 0
                     )
 
-                    candidate_alert: AlertTriggerRequest | None = None
+                    candidate_violations: list[AlertTriggerRequest] = []
 
                     if is_work_off_schedule:
-                        candidate_alert = AlertTriggerRequest(
+                        candidate_violations.append(AlertTriggerRequest(
                             project_id=project.id,
                             schedule_id=current_stage.id,
                             severity="RED",
                             trigger_type="WORK_OFF_SCHEDULE",
                             details={
-                                "message": f"Обнаружена работа техники ({total_active} ед.) до планового старта этапа (план: {stage_start.strftime('%d.%m.%Y')})"
+                                "message": (
+                                    f"Обнаружена работа техники ({total_active} ед.) "
+                                    f"до планового старта этапа "
+                                    f"(план: {stage_start.strftime('%d.%m.%Y')})"
+                                )
                             },
-                        )
+                        ))
 
-                    elif missing_equipment and current_stage.is_critical_path:
+                    if missing_equipment and current_stage.is_critical_path:
                         missing_text = ", ".join(
                             f"{t} (не хватает {info['missing']} шт.)"
                             for t, info in missing_equipment.items()
                         )
-                        candidate_alert = AlertTriggerRequest(
+                        candidate_violations.append(AlertTriggerRequest(
                             project_id=project.id,
                             schedule_id=current_stage.id,
                             severity="RED",
@@ -276,14 +305,13 @@ async def run_analytics_task():
                                 "missing_equipment": missing_equipment,
                                 "is_critical_path": True,
                             },
-                        )
-
+                        ))
                     elif missing_equipment:
                         missing_text = ", ".join(
                             f"{t} (не хватает {info['missing']} шт.)"
                             for t, info in missing_equipment.items()
                         )
-                        candidate_alert = AlertTriggerRequest(
+                        candidate_violations.append(AlertTriggerRequest(
                             project_id=project.id,
                             schedule_id=current_stage.id,
                             severity="YELLOW",
@@ -295,13 +323,14 @@ async def run_analytics_task():
                                 "missing_equipment": missing_equipment,
                                 "is_critical_path": False,
                             },
-                        )
+                        ))
 
-                    elif total_idle > 0:
+                    if total_idle > 0:
                         idle_list_str = ", ".join(
-                            f"{cls_name} ({cnt} шт.)" for cls_name, cnt in idle_by_class.items()
+                            f"{cls_name} ({cnt} шт.)"
+                            for cls_name, cnt in idle_by_class.items()
                         )
-                        candidate_alert = AlertTriggerRequest(
+                        candidate_violations.append(AlertTriggerRequest(
                             project_id=project.id,
                             schedule_id=current_stage.id,
                             severity="YELLOW",
@@ -309,15 +338,18 @@ async def run_analytics_task():
                             trigger_frame_id=frames[-1].id,
                             escalation_hours=24,
                             details={
-                                "message": f"Зафиксирован технологический простой техники: {idle_list_str}",
+                                "message": (
+                                    f"Зафиксирован технологический простой техники: "
+                                    f"{idle_list_str}"
+                                ),
                                 "idle_equipment": idle_by_class,
                                 "total_idle_count": total_idle,
                             },
-                        )
+                        ))
 
-                    elif unauthorized_equipment:
+                    if unauthorized_equipment:
                         unauth_str = ", ".join(f"«{t}»" for t in unauthorized_equipment)
-                        candidate_alert = AlertTriggerRequest(
+                        candidate_violations.append(AlertTriggerRequest(
                             project_id=project.id,
                             schedule_id=current_stage.id,
                             severity="YELLOW",
@@ -325,14 +357,18 @@ async def run_analytics_task():
                             trigger_frame_id=frames[-1].id,
                             escalation_hours=8,
                             details={
-                                "message": f"На объекте зафиксирована лишняя техника: {unauth_str}",
+                                "message": (
+                                    f"На объекте зафиксирована лишняя техника: {unauth_str}"
+                                ),
                                 "unauthorized_types": unauthorized_equipment,
                             },
-                        )
+                        ))
 
-                    elif surplus_equipment:
-                        surplus_str = ", ".join(f"{t} (+{cnt} шт.)" for t, cnt in surplus_equipment.items())
-                        candidate_alert = AlertTriggerRequest(
+                    if surplus_equipment:
+                        surplus_str = ", ".join(
+                            f"{t} (+{cnt} шт.)" for t, cnt in surplus_equipment.items()
+                        )
+                        candidate_violations.append(AlertTriggerRequest(
                             project_id=project.id,
                             schedule_id=current_stage.id,
                             severity="YELLOW",
@@ -341,21 +377,13 @@ async def run_analytics_task():
                                 "message": f"Избыток техники сверх норматива: {surplus_str}",
                                 "surplus_equipment": surplus_equipment,
                             },
-                        )
+                        ))
+                    has_red = any(v.severity == "RED" for v in candidate_violations)
+                    has_yellow = any(v.severity == "YELLOW" for v in candidate_violations)
 
-                    stmt_check_red = select(Alert).where(
-                        Alert.project_id == project.id,
-                        Alert.status == "OPEN",
-                        Alert.severity == "RED",
-                    )
-                    has_open_red = (await session.scalars(stmt_check_red)).first() is not None
-
-                    if has_open_red and candidate_alert and candidate_alert.severity == "YELLOW":
-                        candidate_alert = None
-
-                    if has_open_red or (candidate_alert and candidate_alert.severity == "RED"):
+                    if has_red:
                         interval_compliance = "VIOLATION"
-                    elif candidate_alert and candidate_alert.severity == "YELLOW":
+                    elif has_yellow:
                         interval_compliance = "WARNING"
                     else:
                         interval_compliance = "NORMAL"
@@ -376,36 +404,15 @@ async def run_analytics_task():
                             "idle_breakdown": idle_by_class,
                         },
                         compliance_status=interval_compliance,
-                        notes=f"Окно {len(frames)} кадров. Уникальных: {total_unique}, простой: {total_idle}",
+                        notes=(
+                            f"Окно {len(frames)} кадров. "
+                            f"Уникальных: {total_unique}, простой: {total_idle}"
+                        ),
                     ))
 
-                    if candidate_alert:
-                        await alert_service.trigger_alert(candidate_alert)
-
-                        stmt_suppress_yellow = select(Alert).where(
-                            Alert.project_id == project.id,
-                            Alert.status == "OPEN",
-                            Alert.severity == "YELLOW",
-                            Alert.trigger_type != candidate_alert.trigger_type,
-                        )
-                        suppressed_yellows = (await session.scalars(stmt_suppress_yellow)).all()
-                        for old_alert in suppressed_yellows:
-                            old_alert.status = "RESOLVED"
-                            old_alert.resolved_at = now
-
-                    else:
-                        stmt_clear_yellow = select(Alert).where(
-                            Alert.project_id == project.id,
-                            Alert.status == "OPEN",
-                            Alert.severity == "YELLOW",
-                        )
-                        open_yellows = (await session.scalars(stmt_clear_yellow)).all()
-                        if open_yellows:
-                            for a in open_yellows:
-                                a.status = "RESOLVED"
-                                a.resolved_at = now
-                            await session.flush()
-                            await alert_service._recalculate_project_alert_level(project)
+                    await alert_service.sync_violations(
+                        project.id, candidate_violations
+                    )
 
                 await session.commit()
                 logger.info("Матрица окна обсчитана")

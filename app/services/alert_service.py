@@ -4,6 +4,10 @@ from decimal import Decimal
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.alert_rules import (
+    aggregate_summary,
+    reconcile_violations,
+)
 from app.core.exceptions import (
     DomainException,
     EntityNotFoundException,
@@ -34,6 +38,52 @@ class AlertService:
         self._session = session
         self._repo = alert_repo or AlertRepository(session)
         self._project_repo = project_repo or ProjectRepository(session)
+        
+    @staticmethod
+    def _parse_uuid_safe(value):
+        if not value:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        try:
+            return uuid.UUID(str(value))
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _parse_dt_safe(value):
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value
+        try:
+            return datetime.fromisoformat(str(value))
+        except (ValueError, TypeError):
+            return None
+
+    def _build_violation(self, data: AlertTriggerRequest, now: datetime) -> dict:
+        escalate_at = None
+        if data.severity == "YELLOW" and data.escalation_hours is not None:
+            escalate_at = (now + timedelta(hours=data.escalation_hours)).isoformat()
+
+        return {
+            "type": data.trigger_type,
+            "severity": data.severity,
+            "message": (data.details or {}).get("message", ""),
+            "schedule_id": str(data.schedule_id) if data.schedule_id else None,
+            "frame_id": str(data.trigger_frame_id) if data.trigger_frame_id else None,
+            "created_at": now.isoformat(),
+            "escalate_at": escalate_at,
+            "yellow_escalated_at": None,
+            "details": data.details or {},
+        }
+
+    def _apply_summary_to_alert(self, alert: Alert, summary: dict) -> None:
+        alert.severity = summary["severity"]
+        alert.trigger_type = summary["trigger_type"]
+        alert.schedule_id = self._parse_uuid_safe(summary.get("schedule_id"))
+        alert.trigger_frame_id = self._parse_uuid_safe(summary.get("frame_id"))
+        alert.escalate_at = self._parse_dt_safe(summary.get("escalate_at"))    
 
     async def _check_engineer_permission(self, project_id: uuid.UUID, user: User) -> None:
         if "admin" in user.roles:
@@ -68,6 +118,7 @@ class AlertService:
             raise ProjectNotFoundException(data.project_id)
 
         now = datetime.now(timezone.utc)
+
         active_window = await self._repo.get_active_special_window(data.project_id)
         if active_window and ensure_utc(active_window.target_deadline) <= now:
             project.current_special_status = "NONE"
@@ -76,71 +127,172 @@ class AlertService:
             await self._recalculate_project_alert_level(project)
             active_window = None
 
-        existing = await self._repo.get_open_alert_by_trigger(
-            project_id=data.project_id,
-            schedule_id=data.schedule_id,
-            trigger_type=data.trigger_type,
-        )
-        if existing:
-            return existing
+        new_v = self._build_violation(data, now)
+        current = await self._repo.get_open_alert_by_project(data.project_id)
 
-        escalate_at = None
-        if data.severity == "YELLOW" and data.escalation_hours is not None:
-            escalate_at = now + timedelta(hours=data.escalation_hours)
+        if current is None:
+            summary = aggregate_summary([new_v])
+            alert_details: dict = {"violations": [new_v]}
+            if project.current_special_status in ("PURPLE", "ORANGE"):
+                alert_details["recorded_during_special_status"] = project.current_special_status
 
-        alert_details = data.details or {}
-        if project.current_special_status in ("PURPLE", "ORANGE"):
-            alert_details["recorded_during_special_status"] = project.current_special_status
+            alert = Alert(
+                project_id=data.project_id,
+                schedule_id=self._parse_uuid_safe(summary.get("schedule_id")),
+                severity=summary["severity"],
+                trigger_type=summary["trigger_type"],
+                status="OPEN",
+                triggered_at=now,
+                escalate_at=self._parse_dt_safe(summary.get("escalate_at")),
+                trigger_frame_id=self._parse_uuid_safe(summary.get("frame_id")),
+                details=alert_details,
+            )
+            self._repo.add(alert)
 
-        alert = Alert(
-            project_id=data.project_id,
-            schedule_id=data.schedule_id,
-            severity=data.severity,
-            trigger_type=data.trigger_type,
-            status="OPEN",
-            triggered_at=now,
-            escalate_at=escalate_at,
-            trigger_frame_id=data.trigger_frame_id,
-            details=alert_details,
-        )
-        self._repo.add(alert)
+            if project.current_special_status not in ("PURPLE", "ORANGE"):
+                if summary["severity"] == "RED":
+                    project.current_alert_level = "RED"
+                elif project.current_alert_level != "RED":
+                    project.current_alert_level = "YELLOW"
+                    if not project.yellow_alert_started_at:
+                        project.yellow_alert_started_at = now
 
-        if project.current_special_status in ("PURPLE", "ORANGE"):
-            pass
+            await self._session.commit()
+            return alert
+
+        old_violations = list((current.details or {}).get("violations", []))
+        existing_keys = {
+            (v.get("type"), v.get("schedule_id")) for v in old_violations
+        }
+        new_key = (new_v["type"], new_v.get("schedule_id"))
+
+        if new_key in existing_keys:
+            merged = old_violations
         else:
-            if data.severity == "RED":
-                project.current_alert_level = "RED"
-            elif data.severity == "YELLOW" and project.current_alert_level != "RED":
-                project.current_alert_level = "YELLOW"
-                if not project.yellow_alert_started_at:
-                    project.yellow_alert_started_at = now
+            merged = old_violations + [new_v]
+
+        summary = aggregate_summary(merged)
+        current.details = {**(current.details or {}), "violations": merged}
+        self._apply_summary_to_alert(current, summary)
+
+        if project.current_special_status not in ("PURPLE", "ORANGE"):
+            await self._session.flush()
+            await self._recalculate_project_alert_level(project)
 
         await self._session.commit()
-        return alert
+        return current
+    
+    async def sync_violations(
+        self,
+        project_id: uuid.UUID,
+        requests: list[AlertTriggerRequest],
+    ) -> Alert | None:
+
+        project = await self._repo.get_project_by_id(project_id)
+        if not project:
+            raise ProjectNotFoundException(project_id)
+
+        now = datetime.now(timezone.utc)
+        new_violations = [self._build_violation(r, now) for r in requests]
+        current = await self._repo.get_open_alert_by_project(project_id)
+
+        if not new_violations:
+            if current and current.severity == "YELLOW":
+                current.status = "RESOLVED"
+                current.resolved_at = now
+                await self._recalculate_project_alert_level(project)
+            await self._session.commit()
+            return current
+
+        if current is None:
+            summary = aggregate_summary(new_violations)
+            alert_details: dict = {"violations": new_violations}
+            if project.current_special_status in ("PURPLE", "ORANGE"):
+                alert_details["recorded_during_special_status"] = project.current_special_status
+
+            alert = Alert(
+                project_id=project_id,
+                schedule_id=self._parse_uuid_safe(summary.get("schedule_id")),
+                severity=summary["severity"],
+                trigger_type=summary["trigger_type"],
+                status="OPEN",
+                triggered_at=now,
+                escalate_at=self._parse_dt_safe(summary.get("escalate_at")),
+                trigger_frame_id=self._parse_uuid_safe(summary.get("frame_id")),
+                details=alert_details,
+            )
+            self._repo.add(alert)
+
+            if project.current_special_status not in ("PURPLE", "ORANGE"):
+                if summary["severity"] == "RED":
+                    project.current_alert_level = "RED"
+                elif project.current_alert_level != "RED":
+                    project.current_alert_level = "YELLOW"
+                    if not project.yellow_alert_started_at:
+                        project.yellow_alert_started_at = now
+
+            await self._session.commit()
+            return alert
+
+        old_violations = list((current.details or {}).get("violations", []))
+        merged = reconcile_violations(old_violations, new_violations)
+        summary = aggregate_summary(merged)
+
+        current.details = {**(current.details or {}), "violations": merged}
+        self._apply_summary_to_alert(current, summary)
+
+        if project.current_special_status not in ("PURPLE", "ORANGE"):
+            await self._session.flush()
+            await self._recalculate_project_alert_level(project)
+
+        await self._session.commit()
+        return current
 
     async def check_and_escalate_alerts(self) -> list[uuid.UUID]:
         now = datetime.now(timezone.utc)
-        alerts_to_escalate = await self._repo.get_alerts_ready_to_escalate(now)
+        alerts_to_check = await self._repo.get_alerts_ready_to_escalate(now)
         escalated_ids: list[uuid.UUID] = []
 
-        for alert in alerts_to_escalate:
-            alert.severity = "RED"
+        for alert in alerts_to_check:
+            violations = list((alert.details or {}).get("violations", []))
+            if not violations:
+                continue
+
+            changed = False
+            for v in violations:
+                if v.get("severity") != "YELLOW":
+                    continue
+                esc_at = self._parse_dt_safe(v.get("escalate_at"))
+                if esc_at is None or esc_at > now:
+                    continue
+                v["severity"] = "RED"
+                v["yellow_escalated_at"] = now.isoformat()
+                changed = True
+
+            if not changed:
+                continue
+
+            summary = aggregate_summary(violations)
+            alert.details = {**(alert.details or {}), "violations": violations}
+            self._apply_summary_to_alert(alert, summary)
             alert.yellow_escalated_to_red_at = now
 
             project = alert.project
             if project and project.current_special_status not in ("PURPLE", "ORANGE"):
                 project.current_alert_level = "RED"
 
-            audit = AuditTrail(
+            self._repo.add(AuditTrail(
                 project_id=alert.project_id,
                 action_type="YELLOW_ESCALATED_TO_RED",
                 new_values={
                     "alert_id": str(alert.id),
-                    "trigger_type": alert.trigger_type,
                     "escalated_at": now.isoformat(),
+                    "violations": [
+                        {"type": v.get("type"), "severity": v.get("severity")}
+                        for v in violations
+                    ],
                 },
-            )
-            self._repo.add(audit)
+            ))
             escalated_ids.append(alert.id)
 
         if escalated_ids:
@@ -169,12 +321,20 @@ class AlertService:
 
         now = datetime.now(timezone.utc)
 
+        evidence_ids: set[uuid.UUID] = set(data.evidence_frame_ids or [])
+        for v in (alert.details or {}).get("violations", []):
+            fid = self._parse_uuid_safe(v.get("frame_id"))
+            if fid:
+                evidence_ids.add(fid)
+        if alert.trigger_frame_id:
+            evidence_ids.add(alert.trigger_frame_id)
+
         resolution = AlertResolution(
             alert_id=alert.id,
             engineer_id=current_user.id,
             action_taken=data.action_taken,
             engineer_comment=data.engineer_comment,
-            evidence_frame_ids=data.evidence_frame_ids,
+            evidence_frame_ids=list(evidence_ids) or None,
             resolved_at=now,
         )
         self._repo.add(resolution)

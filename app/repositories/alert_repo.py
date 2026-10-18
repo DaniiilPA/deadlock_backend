@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Sequence
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -47,6 +47,18 @@ class AlertRepository:
 
         return await self._session.scalar(query)
 
+    async def get_open_alert_by_project(self, project_id: uuid.UUID) -> Alert | None:
+        query = (
+            select(Alert)
+            .where(Alert.project_id == project_id, Alert.status == "OPEN")
+            .order_by(
+                case((Alert.severity == "RED", 0), else_=1),
+                Alert.triggered_at.desc(),
+            )
+            .limit(1)
+        )
+        return await self._session.scalar(query)
+
     async def list_alerts(
         self,
         project_id: uuid.UUID | None = None,
@@ -80,7 +92,6 @@ class AlertRepository:
             select(Alert)
             .options(joinedload(Alert.project))
             .where(
-                Alert.severity == "YELLOW",
                 Alert.status == "OPEN",
                 Alert.escalate_at.is_not(None),
                 Alert.escalate_at <= now,
