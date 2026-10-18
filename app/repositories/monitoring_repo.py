@@ -93,5 +93,8 @@ class MonitoringRepository:
             .order_by(CameraFrameAnalysis.camera_id, CameraFrameAnalysis.captured_at.desc())
         )
         return (await self._session.scalars(query)).all()
+    
+    def add(self, entity) -> None:
+        self._session.add(entity)
         
     
