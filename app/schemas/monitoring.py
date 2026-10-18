@@ -109,8 +109,9 @@ class CameraSnapshotResponse(BaseModel):
     stream_url: str
     is_active: bool
     captured_at: datetime | None = None
-    image_url: str | None = None
-    image_base64: str | None = None
+    raw_image_base64: str | None = None 
+    annotated_image_base64: str | None = None 
     detection_count: int = 0
+    detected_classes_ru: list[str] = []      
 
     model_config = ConfigDict(from_attributes=True)

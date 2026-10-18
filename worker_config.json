@@ -1,7 +1,7 @@
 {
-  "capture_interval_sec": 3,
-  "analytics_interval_sec": 30,
-  "window_frames_count": 10,
-  "idle_pixel_threshold": 15.0,
+  "capture_interval_sec": 1,
+  "analytics_interval_sec": 5,
+  "window_frames_count": 5,
+  "idle_pixel_threshold": 5.0,
   "reid_similarity_threshold": 0.78
 }

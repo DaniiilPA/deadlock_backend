@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.imaging import image_file_to_base64, render_annotated_frame
 from app.core.exceptions import DomainException, EntityNotFoundException, ProjectNotFoundException
 from app.db.models import Camera, CameraFrameAnalysis, CameraIntervalAnalytics, User
+from app.repositories.dictionary_repo import DictionaryRepository
 from app.repositories.monitoring_repo import MonitoringRepository
 from app.repositories.project_repo import ProjectRepository
 from app.schemas.monitoring import (
@@ -244,14 +246,26 @@ class MonitoringService:
         await self._session.commit()
         return frame
 
+    async def _get_class_to_ru_name_map(self) -> dict[str, str]:
+        eq_types = await self._dict_repo.get_equipment_types()
+        mapping = {}
+        for eq in eq_types:
+            mapping[eq.code.lower()] = eq.name
+            for ml_name in (eq.ml_class_names or []):
+                mapping[ml_name.lower()] = eq.name
+        return mapping
+
     async def get_project_cameras_snapshots(
         self, project_id: uuid.UUID
     ) -> list[dict]:
+        """Формирует для фронта чистый кадр и кадр с разметкой по всем камерам за 1 запрос"""
         await self._ensure_project_exists(project_id)
 
         cameras = await self._repo.get_cameras_by_project_id(project_id)
         if not cameras:
             return []
+
+        class_name_map = await self._get_class_to_ru_name_map()
 
         latest_frames = await self._repo.get_latest_frames_for_all_cameras(project_id)
         frames_map = {f.camera_id: f for f in latest_frames}
@@ -259,30 +273,33 @@ class MonitoringService:
         result = []
         for cam in cameras:
             frame = frames_map.get(cam.id)
-            b64_data = None
-            img_url = None
+            raw_b64 = None
+            annotated_b64 = None
             captured_at = None
+            classes_ru = []
             det_count = 0
 
             if frame and frame.image_path and os.path.exists(frame.image_path):
                 captured_at = frame.captured_at
-                img_url = frame.image_url
-                det_count = len(frame.detection_result or [])
+                dets = frame.detection_result or []
+                det_count = len(dets)
                 try:
-                    with open(frame.image_path, "rb") as img_file:
-                        encoded = base64.b64encode(img_file.read()).decode("utf-8")
-                        b64_data = f"data:image/jpeg;base64,{encoded}"
+                    raw_b64 = image_file_to_base64(frame.image_path)
+                    annotated_b64, classes_ru = render_annotated_frame(
+                        frame.image_path, dets, class_name_map
+                    )
                 except Exception:
-                    b64_data = None
+                    raw_b64, annotated_b64, classes_ru = None, None, []
 
             result.append({
                 "camera_id": cam.id,
                 "stream_url": cam.stream_url,
                 "is_active": cam.is_active,
                 "captured_at": captured_at,
-                "image_url": img_url,
-                "image_base64": b64_data,
+                "raw_image_base64": raw_b64,
+                "annotated_image_base64": annotated_b64,
                 "detection_count": det_count,
+                "detected_classes_ru": classes_ru,
             })
 
         return result

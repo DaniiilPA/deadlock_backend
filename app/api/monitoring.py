@@ -240,7 +240,7 @@ async def update_runtime_worker_config(
 @router.get(
     "/projects/{project_id}/cameras/snapshots",
     response_model=list[CameraSnapshotResponse],
-    summary="Получение последних снимков со всех камер объекта (в одном запросе)",
+    summary="Получение последних снимков со всех камер объекта (чистое + с разметкой)",
 )
 async def get_project_cameras_snapshots(
     project_id: uuid.UUID,

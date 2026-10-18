@@ -114,7 +114,7 @@ async def run_analytics_task():
 
                             w1 = max(float(b1[2] - b1[0]), 1.0)
                             h1 = max(float(b1[3] - b1[1]), 1.0)
-                            adaptive_threshold = max(10.0, 0.08 * min(w1, h1))
+                            adaptive_threshold = max(5.0, 0.04 * min(w1, h1))
 
                             max_dist_in_window = 0.0
                             for mid_frame in cam_frames[1:]:
@@ -154,12 +154,18 @@ async def run_analytics_task():
 
                                 if cls_name in STATIC_EQUIPMENT_CLASSES:
                                     active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
-                                elif min_dist < adaptive_threshold and max_dist_in_window < adaptive_threshold and ar_diff < 0.12:
+                                elif min_dist < adaptive_threshold and max_dist_in_window < adaptive_threshold and ar_diff < 0.05:
                                     idle_by_class[cls_name] = idle_by_class.get(cls_name, 0) + 1
                                 else:
                                     active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
                             else:
                                 active_by_class[cls_name] = active_by_class.get(cls_name, 0) + 1
+
+                    if active_by_class.get("excavator", 0) > 0:
+                        for truck_type in ("dump_truck", "truck"):
+                            idle_trucks = idle_by_class.pop(truck_type, 0)
+                            if idle_trucks > 0:
+                                active_by_class[truck_type] = active_by_class.get(truck_type, 0) + idle_trucks    
 
                     total_idle = sum(idle_by_class.values())
                     total_active = sum(active_by_class.values())
@@ -168,9 +174,10 @@ async def run_analytics_task():
                     latest_vectors: list[list[float]] = []
 
                     for cam_id, cam_frames in frames_by_cam.items():
-                        last_frame = cam_frames[-1]
-                        dets = last_frame.detection_result or []
-                        embs = last_frame.embeddings_data or []
+                        recent_frames = cam_frames[-3:] if len(cam_frames) >= 3 else cam_frames
+                        best_frame = max(recent_frames, key=lambda f: len(f.detection_result or []))
+                        dets = best_frame.detection_result or []
+                        embs = best_frame.embeddings_data or []
                         for idx, d in enumerate(dets):
                             vec = embs[idx].get("vector") if idx < len(embs) else []
                             det_dict = dict(d)
