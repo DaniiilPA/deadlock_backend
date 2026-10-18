@@ -97,4 +97,3 @@ class MonitoringRepository:
     def add(self, entity) -> None:
         self._session.add(entity)
         
-    

@@ -28,10 +28,12 @@ class MonitoringService:
         session: AsyncSession,
         monitoring_repo: MonitoringRepository | None = None,
         project_repo: ProjectRepository | None = None,
+        dict_repo: DictionaryRepository | None = None,
     ) -> None:
         self._session = session
         self._repo = monitoring_repo or MonitoringRepository(session)
         self._project_repo = project_repo or ProjectRepository(session)
+        self._dict_repo = dict_repo or DictionaryRepository(session)
 
     async def _check_camera_permission(self, camera: Camera, user: User) -> None:
         if "admin" in user.roles:
@@ -129,7 +131,7 @@ class MonitoringService:
 
         image_url = f"/static/{filename}"
         return file_path, image_url, filename
-    
+
     async def record_frame(
         self, camera_id: uuid.UUID, data: FrameAnalysisCreate
     ) -> CameraFrameAnalysis:
@@ -258,7 +260,6 @@ class MonitoringService:
     async def get_project_cameras_snapshots(
         self, project_id: uuid.UUID
     ) -> list[dict]:
-        """Формирует для фронта чистый кадр и кадр с разметкой по всем камерам за 1 запрос"""
         await self._ensure_project_exists(project_id)
 
         cameras = await self._repo.get_cameras_by_project_id(project_id)
@@ -266,7 +267,6 @@ class MonitoringService:
             return []
 
         class_name_map = await self._get_class_to_ru_name_map()
-
         latest_frames = await self._repo.get_latest_frames_for_all_cameras(project_id)
         frames_map = {f.camera_id: f for f in latest_frames}
 
