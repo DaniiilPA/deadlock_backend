@@ -27,6 +27,7 @@ logger = logging.getLogger("analytics")
 
 STATIC_EQUIPMENT_CLASSES = {"mobile_crane", "tower_crane"}
 
+
 async def auto_resolve_alert(session, project_id: uuid.UUID, schedule_id: uuid.UUID, trigger_type: str) -> bool:
     stmt = (
         select(Alert)
@@ -35,6 +36,7 @@ async def auto_resolve_alert(session, project_id: uuid.UUID, schedule_id: uuid.U
             Alert.schedule_id == schedule_id,
             Alert.trigger_type == trigger_type,
             Alert.status == "OPEN",
+            Alert.severity == "YELLOW",
         )
     )
     open_alert = await session.scalar(stmt)
@@ -165,7 +167,7 @@ async def run_analytics_task():
                         for truck_type in ("dump_truck", "truck"):
                             idle_trucks = idle_by_class.pop(truck_type, 0)
                             if idle_trucks > 0:
-                                active_by_class[truck_type] = active_by_class.get(truck_type, 0) + idle_trucks    
+                                active_by_class[truck_type] = active_by_class.get(truck_type, 0) + idle_trucks
 
                     total_idle = sum(idle_by_class.values())
                     total_active = sum(active_by_class.values())
@@ -218,6 +220,146 @@ async def run_analytics_task():
                     allowed_set = {x.split(":")[0] for x in (current_stage.allowed_equipment or [])}
                     total_required = sum(req_map.values())
 
+                    missing_equipment = {}
+                    for req_type, req_cnt in req_map.items():
+                        actual_cnt = detected_unique_counts.get(req_type, 0)
+                        if actual_cnt < req_cnt:
+                            missing_equipment[req_type] = {
+                                "required": req_cnt,
+                                "actual": actual_cnt,
+                                "missing": req_cnt - actual_cnt,
+                            }
+
+                    unauthorized_equipment = [
+                        det for det in detected_unique_counts.keys()
+                        if det not in req_map and det not in allowed_set
+                    ]
+
+                    surplus_equipment = {}
+                    for req_type, req_cnt in req_map.items():
+                        actual_cnt = detected_unique_counts.get(req_type, 0)
+                        if actual_cnt > req_cnt + 2:
+                            surplus_equipment[req_type] = actual_cnt - req_cnt
+
+                    stage_start = ensure_utc(current_stage.base_start_date)
+                    is_work_off_schedule = (
+                        current_stage.status == "PLANNED" and now < stage_start and total_active > 0
+                    )
+
+                    candidate_alert: AlertTriggerRequest | None = None
+
+                    if is_work_off_schedule:
+                        candidate_alert = AlertTriggerRequest(
+                            project_id=project.id,
+                            schedule_id=current_stage.id,
+                            severity="RED",
+                            trigger_type="WORK_OFF_SCHEDULE",
+                            details={
+                                "message": f"Обнаружена работа техники ({total_active} ед.) до планового старта этапа (план: {stage_start.strftime('%d.%m.%Y')})"
+                            },
+                        )
+
+                    elif missing_equipment and current_stage.is_critical_path:
+                        missing_text = ", ".join(
+                            f"{t} (не хватает {info['missing']} шт.)"
+                            for t, info in missing_equipment.items()
+                        )
+                        candidate_alert = AlertTriggerRequest(
+                            project_id=project.id,
+                            schedule_id=current_stage.id,
+                            severity="RED",
+                            trigger_type="EQUIPMENT_DEFICIT",
+                            trigger_frame_id=frames[-1].id,
+                            escalation_hours=12,
+                            details={
+                                "message": f"Критический дефицит техники: {missing_text}",
+                                "missing_equipment": missing_equipment,
+                                "is_critical_path": True,
+                            },
+                        )
+
+                    elif missing_equipment:
+                        missing_text = ", ".join(
+                            f"{t} (не хватает {info['missing']} шт.)"
+                            for t, info in missing_equipment.items()
+                        )
+                        candidate_alert = AlertTriggerRequest(
+                            project_id=project.id,
+                            schedule_id=current_stage.id,
+                            severity="YELLOW",
+                            trigger_type="EQUIPMENT_DEFICIT",
+                            trigger_frame_id=frames[-1].id,
+                            escalation_hours=12,
+                            details={
+                                "message": f"Дефицит техники на этапе: {missing_text}",
+                                "missing_equipment": missing_equipment,
+                                "is_critical_path": False,
+                            },
+                        )
+
+                    elif total_idle > 0:
+                        idle_list_str = ", ".join(
+                            f"{cls_name} ({cnt} шт.)" for cls_name, cnt in idle_by_class.items()
+                        )
+                        candidate_alert = AlertTriggerRequest(
+                            project_id=project.id,
+                            schedule_id=current_stage.id,
+                            severity="YELLOW",
+                            trigger_type="EQUIPMENT_IDLE",
+                            trigger_frame_id=frames[-1].id,
+                            escalation_hours=24,
+                            details={
+                                "message": f"Зафиксирован технологический простой техники: {idle_list_str}",
+                                "idle_equipment": idle_by_class,
+                                "total_idle_count": total_idle,
+                            },
+                        )
+
+                    elif unauthorized_equipment:
+                        unauth_str = ", ".join(f"«{t}»" for t in unauthorized_equipment)
+                        candidate_alert = AlertTriggerRequest(
+                            project_id=project.id,
+                            schedule_id=current_stage.id,
+                            severity="YELLOW",
+                            trigger_type="EQUIPMENT_MISMATCH",
+                            trigger_frame_id=frames[-1].id,
+                            escalation_hours=8,
+                            details={
+                                "message": f"На объекте зафиксирована лишняя техника: {unauth_str}",
+                                "unauthorized_types": unauthorized_equipment,
+                            },
+                        )
+
+                    elif surplus_equipment:
+                        surplus_str = ", ".join(f"{t} (+{cnt} шт.)" for t, cnt in surplus_equipment.items())
+                        candidate_alert = AlertTriggerRequest(
+                            project_id=project.id,
+                            schedule_id=current_stage.id,
+                            severity="YELLOW",
+                            trigger_type="EQUIPMENT_SURPLUS",
+                            details={
+                                "message": f"Избыток техники сверх норматива: {surplus_str}",
+                                "surplus_equipment": surplus_equipment,
+                            },
+                        )
+
+                    stmt_check_red = select(Alert).where(
+                        Alert.project_id == project.id,
+                        Alert.status == "OPEN",
+                        Alert.severity == "RED",
+                    )
+                    has_open_red = (await session.scalars(stmt_check_red)).first() is not None
+
+                    if has_open_red and candidate_alert and candidate_alert.severity == "YELLOW":
+                        candidate_alert = None
+
+                    if has_open_red or (candidate_alert and candidate_alert.severity == "RED"):
+                        interval_compliance = "VIOLATION"
+                    elif candidate_alert and candidate_alert.severity == "YELLOW":
+                        interval_compliance = "WARNING"
+                    else:
+                        interval_compliance = "NORMAL"
+
                     session.add(CameraIntervalAnalytics(
                         project_id=project.id,
                         schedule_id=current_stage.id,
@@ -233,115 +375,37 @@ async def run_analytics_task():
                             "detected_unique": detected_unique_counts,
                             "idle_breakdown": idle_by_class,
                         },
-                        compliance_status="NORMAL" if total_idle == 0 else "WARNING",
+                        compliance_status=interval_compliance,
                         notes=f"Окно {len(frames)} кадров. Уникальных: {total_unique}, простой: {total_idle}",
                     ))
 
-                    need_recalc = False
+                    if candidate_alert:
+                        await alert_service.trigger_alert(candidate_alert)
 
-                    if total_idle > 0:
-                        idle_list_str = ", ".join(f"{cls_name} ({cnt} шт.)" for cls_name, cnt in idle_by_class.items())
-                        await alert_service.trigger_alert(AlertTriggerRequest(
-                            project_id=project.id,
-                            schedule_id=current_stage.id,
-                            severity="YELLOW",
-                            trigger_type="EQUIPMENT_IDLE",
-                            trigger_frame_id=frames[-1].id,
-                            escalation_hours=24,
-                            details={
-                                "message": f"Зафиксирован простой техники: {idle_list_str}",
-                                "idle_equipment": idle_by_class,
-                                "total_idle_count": total_idle,
-                            }
-                        ))
+                        stmt_suppress_yellow = select(Alert).where(
+                            Alert.project_id == project.id,
+                            Alert.status == "OPEN",
+                            Alert.severity == "YELLOW",
+                            Alert.trigger_type != candidate_alert.trigger_type,
+                        )
+                        suppressed_yellows = (await session.scalars(stmt_suppress_yellow)).all()
+                        for old_alert in suppressed_yellows:
+                            old_alert.status = "RESOLVED"
+                            old_alert.resolved_at = now
+
                     else:
-                        if await auto_resolve_alert(session, project.id, current_stage.id, "EQUIPMENT_IDLE"):
-                            need_recalc = True
-
-                    for req_type, req_cnt in req_map.items():
-                        actual_cnt = detected_unique_counts.get(req_type, 0)
-                        trigger_name = f"DEFICIT_{req_type.upper()}"
-                        if actual_cnt < req_cnt:
-                            sev = "RED" if current_stage.is_critical_path else "YELLOW"
-                            missing_cnt = req_cnt - actual_cnt
-                            await alert_service.trigger_alert(AlertTriggerRequest(
-                                project_id=project.id,
-                                schedule_id=current_stage.id,
-                                severity=sev,
-                                trigger_type=trigger_name,
-                                trigger_frame_id=frames[-1].id,
-                                escalation_hours=12,
-                                details={
-                                    "message": f"Дефицит: '{req_type}' требуется {req_cnt} ед., в наличии {actual_cnt} ед. (не хватает {missing_cnt} ед.)",
-                                    "equipment_type": req_type,
-                                    "required_count": req_cnt,
-                                    "detected_count": actual_cnt,
-                                    "missing_count": missing_cnt,
-                                    "is_critical_path": current_stage.is_critical_path,
-                                }
-                            ))
-                        else:
-                            if await auto_resolve_alert(session, project.id, current_stage.id, trigger_name):
-                                need_recalc = True
-
-                    for det_type in detected_unique_counts.keys():
-                        trigger_name = f"MISMATCH_{det_type.upper()}"
-                        if det_type not in req_map and det_type not in allowed_set:
-                            await alert_service.trigger_alert(AlertTriggerRequest(
-                                project_id=project.id,
-                                schedule_id=current_stage.id,
-                                severity="YELLOW",
-                                trigger_type=trigger_name,
-                                trigger_frame_id=frames[-1].id,
-                                escalation_hours=8,
-                                details={
-                                    "message": f"На объекте зафиксирована лишняя техника '{det_type}', не предусмотренная регламентом этапа",
-                                    "detected_type": det_type,
-                                    "allowed_equipment": list(allowed_set),
-                                    "required_equipment": list(req_map.keys()),
-                                }
-                            ))
-                        else:
-                            if await auto_resolve_alert(session, project.id, current_stage.id, trigger_name):
-                                need_recalc = True
-
-                    for req_type, req_cnt in req_map.items():
-                        actual_cnt = detected_unique_counts.get(req_type, 0)
-                        trigger_name = f"SURPLUS_{req_type.upper()}"
-                        if actual_cnt > req_cnt + 2:
-                            surplus_cnt = actual_cnt - req_cnt
-                            await alert_service.trigger_alert(AlertTriggerRequest(
-                                project_id=project.id,
-                                schedule_id=current_stage.id,
-                                severity="YELLOW",
-                                trigger_type=trigger_name,
-                                details={
-                                    "message": f"Избыток техники '{req_type}': обнаружено {actual_cnt} ед. при плане {req_cnt} ед. (+{surplus_cnt} сверх нормы)",
-                                    "equipment_type": req_type,
-                                    "required_count": req_cnt,
-                                    "detected_count": actual_cnt,
-                                }
-                            ))
-                        else:
-                            if await auto_resolve_alert(session, project.id, current_stage.id, trigger_name):
-                                need_recalc = True
-
-                    stage_start = ensure_utc(current_stage.base_start_date)
-                    if current_stage.status == "PLANNED" and now < stage_start and total_active > 0:
-                        await alert_service.trigger_alert(AlertTriggerRequest(
-                            project_id=project.id,
-                            schedule_id=current_stage.id,
-                            severity="RED",
-                            trigger_type="WORK_OFF_SCHEDULE",
-                            details={
-                                "message": f"Обнаружена работа техники ({total_active} ед.) до планового старта этапа (плановый старт: {stage_start.strftime('%d.%m.%Y')})",
-                                "active_equipment_count": total_active,
-                            }
-                        ))
-
-                    if need_recalc:
-                        await session.flush()
-                        await alert_service._recalculate_project_alert_level(project)
+                        stmt_clear_yellow = select(Alert).where(
+                            Alert.project_id == project.id,
+                            Alert.status == "OPEN",
+                            Alert.severity == "YELLOW",
+                        )
+                        open_yellows = (await session.scalars(stmt_clear_yellow)).all()
+                        if open_yellows:
+                            for a in open_yellows:
+                                a.status = "RESOLVED"
+                                a.resolved_at = now
+                            await session.flush()
+                            await alert_service._recalculate_project_alert_level(project)
 
                 await session.commit()
                 logger.info("Матрица окна обсчитана")
