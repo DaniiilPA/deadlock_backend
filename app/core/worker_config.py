@@ -13,6 +13,7 @@ class WorkerRuntimeConfig(BaseModel):
     window_frames_count: int = Field(default=10, ge=3, le=100)
     idle_pixel_threshold: float = Field(default=15.0, ge=1.0, le=100.0)
     reid_similarity_threshold: float = Field(default=0.78, ge=0.5, le=0.99)
+    frame_retention_minutes: int = Field(default=5, ge=1, le=1440)
 
 
 def get_worker_config() -> WorkerRuntimeConfig:

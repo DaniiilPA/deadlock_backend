@@ -3,7 +3,8 @@ import anyio
 import shutil
 import uuid
 import base64
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timedelta, timezone
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -131,6 +132,29 @@ class MonitoringService:
 
         image_url = f"/static/{filename}"
         return file_path, image_url, filename
+
+    async def cleanup_old_frames(self, retention_minutes: int) -> dict:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=retention_minutes)
+
+        paths = await self._repo.delete_frames_before(cutoff)
+        await self._session.commit()
+
+        deleted_files = 0
+        missing_files = 0
+        for p in paths:
+            if os.path.exists(p):
+                os.remove(p)
+                deleted_files += 1
+            else:
+                missing_files += 1
+
+        return {
+            "retention_minutes": retention_minutes,
+            "cutoff": cutoff.isoformat(),
+            "db_records_deleted": len(paths),
+            "files_deleted": deleted_files,
+            "files_missing": missing_files,
+        }
 
     async def record_frame(
         self, camera_id: uuid.UUID, data: FrameAnalysisCreate

@@ -3,5 +3,6 @@
   "analytics_interval_sec": 5,
   "window_frames_count": 5,
   "idle_pixel_threshold": 5.0,
-  "reid_similarity_threshold": 0.78
+  "reid_similarity_threshold": 0.78,
+  "frame_retention_minutes": 5
 }

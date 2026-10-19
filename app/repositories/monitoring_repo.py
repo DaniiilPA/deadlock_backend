@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Sequence
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -93,6 +93,20 @@ class MonitoringRepository:
             .order_by(CameraFrameAnalysis.camera_id, CameraFrameAnalysis.captured_at.desc())
         )
         return (await self._session.scalars(query)).all()
+    
+    async def delete_frames_before(
+        self, cutoff: datetime
+    ) -> Sequence[str]:
+        stmt = (
+            delete(CameraFrameAnalysis)
+            .where(
+                CameraFrameAnalysis.captured_at < cutoff,
+                CameraFrameAnalysis.is_saved_for_report.is_(False),
+            )
+            .returning(CameraFrameAnalysis.image_path)
+        )
+        result = await self._session.execute(stmt)
+        return [row[0] for row in result.all() if row[0]]
     
     def add(self, entity) -> None:
         self._session.add(entity)

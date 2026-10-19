@@ -4,13 +4,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.db.session import AsyncSessionLocal
 from app.services.alert_service import AlertService
 from app.services.schedule_service import ScheduleService
+from app.core.worker_config import get_worker_config
+from app.services.monitoring_service import MonitoringService
 
 logger = logging.getLogger("scheduler")
 scheduler = AsyncIOScheduler()
 
 
 async def check_escalations_job() -> None:
-    """Каждую минуту проверяет протухшие YELLOW алерты и истекшие спецстатусы"""
     async with AsyncSessionLocal() as session:
         try:
             alert_service = AlertService(session)
@@ -25,13 +26,31 @@ async def check_escalations_job() -> None:
             logger.error("Error during alert escalation check: %s", e)
 
 async def sync_stages_job() -> None:
-    """Каждые 5 минут переводит этапы стройки по времени (PLANNED -> IN_PROGRESS -> DELAYED)"""
     async with AsyncSessionLocal() as session:
         try:
             schedule_service = ScheduleService(session)
             await schedule_service.sync_all_active_projects_stages()
         except Exception as e:
             logger.error("Error syncing project stages: %s", e)
+
+async def cleanup_frames_job() -> None:
+    async with AsyncSessionLocal() as session:
+        try:
+            retention = get_worker_config().frame_retention_minutes
+            service = MonitoringService(session)
+            stats = await service.cleanup_old_frames(retention)
+
+            if stats["db_records_deleted"] > 0:
+                logger.info(
+                    "Cleanup кадров: удалено %d записей БД, %d файлов "
+                    "(retention %d мин, отсутствовало %d файлов)",
+                    stats["db_records_deleted"],
+                    stats["files_deleted"],
+                    stats["retention_minutes"],
+                    stats["files_missing"],
+                )
+        except Exception as e:
+            logger.error("Ошибка cleanup_frames_job: %s", e)
 
 
 def start_scheduler() -> None:
@@ -47,6 +66,13 @@ def start_scheduler() -> None:
         "interval",
         minutes=5,
         id="sync_stages",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        cleanup_frames_job,
+        "interval",
+        minutes=1,
+        id="cleanup_frames",
         replace_existing=True,
     )
     scheduler.start()
