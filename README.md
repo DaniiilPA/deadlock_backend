@@ -11,7 +11,7 @@
 * **Документация:** [ссылка на документ](https://drive.google.com/file/d/14N9jBtm1cCIT_PdHqpMLB3pICPC9Zu0V/view?usp=sharing)
 * **Презентация:** [ссылка на презентацию](https://drive.google.com/file/d/1Lt43PQYYF4VjFnJ9JTObumPxDsG-TL06/view)
 * **Видео демонстрация:** [ссылка на видео](https://drive.google.com/file/d/1nRPOe2DvWfH_i0MW6T-feNTy1oXYFW1X/view?usp=sharing)
-
+* **Работающий прототип(есть 1 ОКС с подключенной камерой):** [ссылка на прототип](https://5.178.3.153/engineer/60695fde-6c6c-4adb-a1aa-0c0bb7f4d4c5)
 ---
 
 ## Стек технологий
